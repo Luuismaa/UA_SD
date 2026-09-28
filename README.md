@@ -100,7 +100,7 @@ La comunicación socket entre la Central y el Monitor de la estación sigue la e
 
 - Docker Engine 20.10+
 - Docker Compose 2.0+
-- Python 3.10+ (opcional para desarrollo fuera de contenedor)
+- Java
 
 ---
 
