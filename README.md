@@ -144,5 +144,5 @@ La comunicación socket entre la Central y el Monitor de la estación sigue la e
 
 ## Autores
 
-- **Integrante 1:** Desarrollo de `WM_Central`, base de datos SQLite, `WM_FO`, infraestructura Cloud en Railway y CI/CD.
-- **Integrante 2:** Desarrollo de `WM_WS_M`, `WM_WS_E`, protocolo de trama de Sockets y contenedorización local con Docker.
+- **Luis:** Desarrollo de `WM_Central`, base de datos SQLite, `WM_FO`, infraestructura Cloud en Railway y CI/CD.
+- **Jaime:** Desarrollo de `WM_WS_M`, `WM_WS_E`, protocolo de trama de Sockets y contenedorización local con Docker.
