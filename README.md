@@ -104,44 +104,6 @@ La comunicación socket entre la Central y el Monitor de la estación sigue la e
 
 ---
 
-## Despliegue y Ejecución
-
-### Entorno Local (Docker)
-
-1. Clonar el repositorio:
-   ```bash
-   git clone https://github.com/usuario/WaterManagement.git
-   cd WaterManagement
-   ```
-
-2. Levantar la infraestructura local de Kafka con Docker Compose:
-   ```bash
-   docker-compose up -d
-   ```
-
-3. Iniciar el sistema central (`WM_Central`):
-   ```bash
-   python -m src.central.main
-   ```
-
-4. Arrancar los componentes de una Estación de Riego (`WM_WS`):
-   ```bash
-   python -m src.station.monitor --id WS_01
-   python -m src.station.engine --id WS_01
-   ```
-
-5. Ejecutar la aplicación del Operario de Campo (`WM_FO`):
-   ```bash
-   python -m src.operator.main --file peticiones.txt
-   ```
-
-### Entorno Cloud (Railway)
-
-- `WM_Central` y Apache Kafka se despliegan de forma automatizada mediante el pipeline de CI/CD configurado en Railway al actualizar la rama `main` de GitHub.
-- Los componentes distribuidos (`WM_WS` y `WM_FO`) pueden apuntar al clúster remoto utilizando el enlace del TCP Proxy expuesto por Railway.
-
----
-
 ## Autores
 
 - **Luis:** Desarrollo de `WM_Central`, base de datos SQLite, `WM_FO`, infraestructura Cloud en Railway y CI/CD.
