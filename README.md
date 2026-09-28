@@ -12,9 +12,6 @@ Sistema distribuido en tiempo real desarrollado para la monitorización y automa
 - [Tecnologías Utilizadas](#tecnologías-utilizadas)
 - [Protocolos y Comunicaciones](#protocolos-y-comunicaciones)
 - [Requisitos Previos](#requisitos-previos)
-- [Despliegue y Ejecución](#despliegue-y-ejecución)
-  - [Entorno Local (Docker)](#entorno-local-docker)
-  - [Entorno Cloud (Railway)](#entorno-cloud-railway)
 - [Autores](#autores)
 
 ---
