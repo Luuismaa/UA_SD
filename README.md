@@ -68,7 +68,7 @@ Cada estación se subdivide en dos módulos:
 
 ## Tecnologías Utilizadas
 
-- **Lenguaje:** Python 3.x
+- **Lenguaje:** Java
 - **Mensajería Event-Driven:** Apache Kafka (modo KRaft)
 - **Comunicación Punto a Punto:** Sockets TCP
 - **Base de Datos:** SQLite
