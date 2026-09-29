@@ -1,5 +1,4 @@
-package WM_Central;
-
+package src.main.java.WM_Central;
 //Nos permite usar sockets
 import java.net.*; 
 
