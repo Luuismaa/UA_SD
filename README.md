@@ -29,16 +29,20 @@ El proyecto simula el ciclo de vida completo de un servicio de riego urbano inte
 ## Arquitectura del Sistema
 
 ```text
-+------------------+         Kafka          +------------------+
-|      WM_FO       | ---------------------> |    WM_Central    |
-| (Field Operator) | <--------------------- |  (Core & Panel)  |
-+------------------+         Kafka          +------------------+
-                                              |              ^
-                                              | Kafka        | Sockets
-                                              v              |
-                                            +------------------+
-                                            |      WM_WS       |
-                                            | (Engine & Mon.)  |
++------------------+                        +------------------+
+|      WM_FO       | -------> Kafka <------ |    WM_Central    |---------+
+| (Field Operator) |                        |  (Core & Panel)  |          |
++------------------+                        +------------------+          |
+                                                     |                    |
+                                                     |                    |
+                                                     v                    |
+                                                   Kafka                  | Socket
+                                                     ^                    |
+                                                     |                    |
+                                                     |                    |
+                                            +------------------+          |
+                                            |      WM_WS       |          |
+                                            | (Engine & Mon.)  |----------+
                                             +------------------+
 ```
 
