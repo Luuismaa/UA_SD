@@ -1,4 +1,4 @@
-package src.main.java.WM_FO;
+package WM_FO;
 
 public class WM_FO {
     
