@@ -1,5 +1,7 @@
 #Compilados de Java
 target/
+
+#MAC
 .DS_Store
 **/.DS_Store
 
