@@ -13,4 +13,14 @@
         <maven.compiler.target>17</maven.compiler.target>
     </properties>
 
+<!-- Configuramos Maven para que instale las dependencias de Kafka para nuestro proyecto--> 
+    <dependencies> 
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.7.0</version>
+        </dependency>
+    </dependencies>
+        
+
 </project>
