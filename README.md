@@ -30,7 +30,7 @@ El proyecto simula el ciclo de vida completo de un servicio de riego urbano inte
 
 ```text
 +------------------+                        +------------------+
-|      WM_FO       | -------> Kafka <------ |    WM_Central    |---------+
+|      WM_FO       | -------> Kafka <------ |    WM_Central    |----------+
 | (Field Operator) |                        |  (Core & Panel)  |          |
 +------------------+                        +------------------+          |
                                                      |                    |
