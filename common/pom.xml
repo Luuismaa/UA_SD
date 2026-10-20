@@ -15,4 +15,12 @@
          que los demás módulos incluyen como dependencia -->
     <artifactId>common</artifactId>
     <packaging>jar</packaging>
+
+    <dependencies>
+        <!-- Sin <version>: la fija el dependencyManagement del padre -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+        </dependency>
+    </dependencies>
 </project>
