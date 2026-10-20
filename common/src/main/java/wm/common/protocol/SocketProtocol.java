@@ -1,4 +1,4 @@
-package common.protocol;
+package wm.common.protocol;
 //Traducir texto a bytes y viceversa usando el estandar de codificación UTF-8
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;

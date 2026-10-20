@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>wm</groupId>
+        <artifactId>watermanagement</artifactId>
+        <version>1.0</version>
+    </parent>
+
+    <!-- UN módulo con DOS aplicaciones (Engine y Monitor) -> DOS jars ejecutables.
+         Comparten código de la estación, por eso viven juntas. -->
+    <artifactId>WM_WS</artifactId>
+
+    <dependencies>
+        <dependency>
+            <groupId>wm</groupId>
+            <artifactId>common</artifactId>
+        </dependency>
+        <!-- Lo usa el Engine (el Monitor habla por sockets) -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <!-- Ejecución 1: WM_WS/target/WM_WS_E.jar -->
+                    <execution>
+                        <id>engine</id>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <!-- outputFile: genera un jar aparte sin sustituir el jar normal del módulo -->
+                            <outputFile>${project.build.directory}/WM_WS_E.jar</outputFile>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>wm.ws.engine.WM_WS_E</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                    <!-- Ejecución 2: WM_WS/target/WM_WS_M.jar (mismo código, distinto main) -->
+                    <execution>
+                        <id>monitor</id>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <outputFile>${project.build.directory}/WM_WS_M.jar</outputFile>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>wm.ws.monitor.WM_WS_M</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

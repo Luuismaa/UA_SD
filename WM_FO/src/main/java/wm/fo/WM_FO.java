@@ -1,4 +1,4 @@
-package WM_FO;
+package wm.fo;
 
 public class WM_FO {
     

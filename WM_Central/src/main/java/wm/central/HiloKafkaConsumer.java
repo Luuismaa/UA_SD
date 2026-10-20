@@ -1,5 +1,4 @@
-package WM_Central;
+package wm.central;
 
 public class HiloKafkaConsumer extends Thread{
-    
 }
