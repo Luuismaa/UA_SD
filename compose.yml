@@ -1,28 +1,26 @@
 services:
-  broker:
-    image: apache/kafka:latest
-    hostname: broker
-    container_name: broker
+  kafka:
+    image: apache/kafka:3.9.1          # imagen oficial de Apache, modo KRaft (sin Zookeeper)
+    container_name: wm-kafka           # nombre fijo: así los comandos docker exec son siempre iguales
     ports:
-      - 9092:9092
+      - "9092:9092"                    # puerto del PC : puerto del contenedor
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_PROCESS_ROLES: broker,controller
+      # --- KRaft: este único nodo hace de broker Y de controlador del clúster ---
       KAFKA_NODE_ID: 1
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:29093
-      KAFKA_LISTENERS: PLAINTEXT://broker:29092,CONTROLLER://broker:29093,PLAINTEXT_HOST://0.0.0.0:9092
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
-      CLUSTER_ID: "gTBb85_WRXu6oQgq-brTQw"
 
-  mongo:
-    image: mongo:latest
-    ports:
-      - 27017:27017
+      # --- Listeners: dónde escucha (LISTENERS) y qué dirección anuncia a los clientes (ADVERTISED) ---
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+
+      # --- Un solo broker: no se puede replicar nada, así que todo a 1 ---
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0   # que los consumidores empiecen sin esperar
+
+      # --- Los topics los crea SOLO la Central ---
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
