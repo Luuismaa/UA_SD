@@ -59,7 +59,7 @@ public class WM_Central {
 				
 			} catch (Exception e) {
 					
-					System.out.println("[KAFKA] No se ha podido conectar con Kafka. Intento " + intentos+1 + "/" + MAX_INTENTOS);
+					System.out.println("[KAFKA] No se ha podido conectar con Kafka. Intento " + (intentos + 1) + "/" + MAX_INTENTOS);
 
 					if(intentos == MAX_INTENTOS-1) {
 						System.err.println("[KAFKA] No se ha podido conectar con Kafka. Apagando la central");
@@ -67,7 +67,7 @@ public class WM_Central {
 					}
 
 					//Esperamos para el próximo intento
-					Thread.sleep(1000L * intentos+1); //1s, 2s, 3s (más los timeouts de KafkaAdmin)
+					Thread.sleep(1000L * (intentos+1)); //1s, 2s, 3s (más los timeouts de KafkaAdmin)
 				}
 			}
 		}
