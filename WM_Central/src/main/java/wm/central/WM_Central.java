@@ -2,15 +2,12 @@ package wm.central;
 //Nos permite usar sockets
 import java.net.*;
 
+import wm.common.interfaces.IKafkaAdmin;
 import wm.common.kafka.KafkaAdmin;
 import wm.common.kafka.Topics; 
 
 
 public class WM_Central {
-	
-		//Maximos intentos que hace la central para conectarse con Kafka (puede que kafka no esté levantado cuando se lanza la central)
-		private static final int MAX_INTENTOS = 10;
-
 		//Puerto de escucha de la central
 		private static int puertoEscucha;
 
@@ -50,25 +47,8 @@ public class WM_Central {
 				System.exit(1);
 			}
 
-			//KAFKA: intentaremos hasta que se conecte con Kafka
-			for (int intentos = 0; intentos < MAX_INTENTOS; intentos++) {
-				try {
-					//Creamos los Topics conectandonos con Kafka (si no se puede por algún error lo volverá a intentar)
-					KafkaAdmin.crearTopicsSiNoExisten(broker, Topics.TODOS);
-					break;
-				
-			} catch (Exception e) {
-					
-					System.out.println("[KAFKA] No se ha podido conectar con Kafka. Intento " + intentos+1 + "/" + MAX_INTENTOS);
-
-					if(intentos == MAX_INTENTOS-1) {
-						System.err.println("[KAFKA] No se ha podido conectar con Kafka. Apagando la central");
-						System.exit(1);
-					}
-
-					//Esperamos para el próximo intento
-					Thread.sleep(1000L * intentos+1); //1s, 2s, 3s (más los timeouts de KafkaAdmin)
-				}
-			}
-		}
+			// KAFKA: Instanciamos mediante la interfaz y ejecutamos la inicialización
+        	IKafkaAdmin kafkaAdmin = new KafkaAdmin();
+        	kafkaAdmin.crearTopicsSiNoExisten(broker, Topics.TODOS);
+	}
 }
