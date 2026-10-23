@@ -1,50 +1,74 @@
 package wm.central;
 //Nos permite usar sockets
-import java.net.*; 
+import java.net.*;
+
+import wm.common.kafka.KafkaAdmin;
+import wm.common.kafka.Topics; 
 
 
 public class WM_Central {
-    
-        //Recibirá: 1. Puerto de escucha 2. IP del Broker 3. Puerto del Broker
+	
+		//Maximos intentos que hace la central para conectarse con Kafka (puede que kafka no esté levantado cuando se lanza la central)
+		private static final int MAX_INTENTOS = 10;
+
+		//Puerto de escucha de la central
+		private static int puertoEscucha;
+
+		//IP y Puerto del broker (Kafka)
+		private static String broker;
+
+		//Ruta del archivo de DB
+		private static String rutaDB;
+
+        //Recibirá: 1. Puerto de escucha 2. IP del Broker:Puerto del Broker (Kafka) y SQLite ruta
         private static void checkArgs(String[] args) {
 
             if(args.length != 3) {
-				System.out.println("Err args: Indicar puerto de escucha, IP y Puerto del Broker");
+				System.err.println("ERR: <Puerto Escucha> <Puerto:IP de Kafka> <Ruta DB>");
 				System.exit (1);
             }
+
+			if(!args[1].contains(":")) {
+				System.err.println("ERR: <Puerto Escucha> <Puerto:IP de Kafka> <Ruta DB>");
+				System.exit (1);
+			}
         }
 
-    	public static void main(String[] args) {
+		//MAIN
+    	public static void main(String[] args) throws InterruptedException{
 
-        checkArgs(args);
+			checkArgs(args);
 
-		try	{
+			try	{
+				//Recolectamos la información
+				puertoEscucha = Integer.parseInt(args[0]);
+				broker = args[1];
+				rutaDB = args[2];
 
-            //Recolectamos la información
-			String puertoEscucha = args[0];
-            String ipBroker = args[1];
-            String puertoBroker = args[2];
+			} catch (Exception ex) {
+				System.err.println("ERROR con el parseo del puerto, procura que sea un número" + ex);
+				System.exit(1);
+			}
 
-            //Definimos programa como server y configuramos su puerto de escucha
-			ServerSocket skServidor = new ServerSocket(Integer.parseInt(puertoEscucha));
-		    System.out.println("Escucho el puerto " + puertoEscucha);
-	
+			//KAFKA: intentaremos hasta que se conecte con Kafka
+			for (int intentos = 0; intentos < MAX_INTENTOS; intentos++) {
+				try {
+					//Creamos los Topics conectandonos con Kafka (si no se puede por algún error lo volverá a intentar)
+					KafkaAdmin.crearTopicsSiNoExisten(broker, Topics.TODOS);
+					break;
+				
+			} catch (Exception e) {
+					
+					System.out.println("[KAFKA] No se ha podido conectar con Kafka. Intento " + intentos+1 + "/" + MAX_INTENTOS);
 
-			while (true)
-			{
-                // Aceptamos las peticiones (Estaciones)
-				Socket skCliente = skServidor.accept();
-		        System.out.println("Cliente aceptado!");
+					if(intentos == MAX_INTENTOS-1) {
+						System.err.println("[KAFKA] No se ha podido conectar con Kafka. Apagando la central");
+						System.exit(1);
+					}
 
-                //Aquí debemos crear nuevo hilo por cada estación que venga, y dentro de esa clase creamos la lógica
-		        //Thread t = new HiloServidor(skCliente);
-		        //t.start();
+					//Esperamos para el próximo intento
+					Thread.sleep(1000L * intentos+1); //1s, 2s, 3s (más los timeouts de KafkaAdmin)
+				}
 			}
 		}
-		catch(Exception e)
-		{
-			System.out.println("Error: " + e.toString());
-			
-		}
-	}
 }

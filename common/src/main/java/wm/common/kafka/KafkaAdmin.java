@@ -21,16 +21,14 @@ public final class KafkaAdmin {
      * Crea los topics que no existan todavía. si ya existen, no hace nada
      * y no lanza error.
      *
-     * @param bootstrap   "ip:puerto" del broker
+     * @param args   argumentos -> "ip:puerto" del broker
      * @param topics      nombres de los topics (p. ej. Topics.TODOS)
-     * @param particiones nº de particiones de cada topic nuevo
-     * @param replicas    factor de replicación (1 si solo hay un broker)
      */
-    public static void crearTopicsSiNoExisten(String bootstrap, Collection<String> topics, int particiones, short replicas) throws Exception {
+    public static void crearTopicsSiNoExisten(String broker, Collection<String> topics) throws Exception {
         Properties props = new Properties();
-        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, broker); //IP:Puerto
         // Timeouts cortos: si Kafka no responde, preferimos fallar rápido y reintentar
-        // desde el main que quedarnos colgados minutos (por defecto son bastante largos).
+        // desde el main que quedarnos colgados minutos.
         props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 10_000);
         props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, 15_000);
 
@@ -38,13 +36,13 @@ public final class KafkaAdmin {
         // así que hay que cerrarlo siempre, incluso si salta una excepción.
         try (AdminClient admin = AdminClient.create(props)) {
 
-            // 1) Qué topics hay ya en el clúster (.get bloquea hasta tener respuesta)
-            Set<String> existentes = admin.listTopics().names().get(10, TimeUnit.SECONDS);
+            // 1) Qué topics hay ya en el clúster 
+            Set<String> existentes = admin.listTopics().names().get();
 
             // 2) Nos quedamos solo con los que faltan
             List<NewTopic> nuevos = topics.stream()
                     .filter(t -> !existentes.contains(t))
-                    .map(t -> new NewTopic(t, particiones, replicas))
+                    .map(t -> new NewTopic(t, 1, (short) 1))
                     .collect(Collectors.toList());
 
             if (nuevos.isEmpty()) {
