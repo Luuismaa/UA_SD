@@ -2,15 +2,12 @@ package wm.central;
 //Nos permite usar sockets
 import java.net.*;
 
+import wm.common.interfaces.IKafkaAdmin;
 import wm.common.kafka.KafkaAdmin;
 import wm.common.kafka.Topics; 
 
 
 public class WM_Central {
-	
-		//Maximos intentos que hace la central para conectarse con Kafka (puede que kafka no esté levantado cuando se lanza la central)
-		private static final int MAX_INTENTOS = 10;
-
 		//Puerto de escucha de la central
 		private static int puertoEscucha;
 
@@ -19,6 +16,8 @@ public class WM_Central {
 
 		//Ruta del archivo de DB
 		private static String rutaDB;
+
+		private static final int  MAX_INTENTOS = 10;
 
         //Recibirá: 1. Puerto de escucha 2. IP del Broker:Puerto del Broker (Kafka) y SQLite ruta
         private static void checkArgs(String[] args) {
@@ -54,7 +53,8 @@ public class WM_Central {
 			for (int intentos = 0; intentos < MAX_INTENTOS; intentos++) {
 				try {
 					//Creamos los Topics conectandonos con Kafka (si no se puede por algún error lo volverá a intentar)
-					KafkaAdmin.crearTopicsSiNoExisten(broker, Topics.TODOS);
+					IKafkaAdmin kafkaAdmin = new KafkaAdmin();
+					kafkaAdmin.crearTopicsSiNoExisten(broker, Topics.TODOS);					
 					break;
 				
 			} catch (Exception e) {
