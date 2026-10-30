@@ -1,0 +1,150 @@
+WATERMANAGEMENT - BLOQUES B Y C: SOCKETS CENTRAL <-> MONITOR
+=============================================================
+
+Objetivo
+--------
+Que la Central y el Monitor de cada estación hablen por socket según el protocolo:
+alta y autenticación (AUTH), latido cada segundo (LATIDO), avisos de fuga (FUGA /
+FUGA_RESUELTA), y que la Central detecte cualquier caída del Monitor.
+Se apoya en lo construido en el bloque A (ConexionesTramas, SocketClient, SocketServer).
+
+
+Visión general
+--------------
+  WM_Central.main
+     └─ SocketServer.startServer(puerto)                 (bloque A)
+           ├─ hilo: ManejadorMonitor (WS-01) ─┐
+           ├─ hilo: ManejadorMonitor (WS-02) ─┼──► RegistroEstaciones (estado compartido)
+           └─ hilo: ManejadorMonitor (WS-03) ─┘
+
+  WM_WS_M.main
+     └─ hilo "conexion-central": conectar + AUTH -> LATIDO cada 1 s -> si cae, reconectar
+
+Mensajes por socket (Monitor -> Central, la Central solo responde al AUTH):
+  AUTH#WS-03#Parque Central   ->  AUTH_OK#WS-03  |  AUTH_KO#WS-03#motivo
+  LATIDO#WS-03                    (cada segundo)
+  FUGA#WS-03
+  FUGA_RESUELTA#WS-03
+Motivos de AUTH_KO: NO_REGISTRADA, ID_DUPLICADO, FORMATO_INVALIDO.
+
+
+BLOQUE B - LA CENTRAL (módulo WM_Central)
+=========================================
+
+1) Estacion.java  (nuevo)
+   Ficha de una WS: id (final), ubicación, estado y si tiene un Monitor conectado.
+   - Empieza siempre en DESCONECTADA: hasta que su Monitor no se autentica, la Central
+     no conoce su estado real (punto 1 de la mecánica).
+   - Getters públicos, setters de paquete: solo RegistroEstaciones puede modificarla.
+   - Campos volatile: un hilo escribe el estado y otros (el panel) lo leen.
+
+2) RegistroEstaciones.java  (nuevo) - el estado compartido
+   Mapa ConcurrentHashMap<id, Estacion> con todas las estaciones conocidas.
+   - registrar(id, ubicación): alta de una estación conocida (hoy fijas, luego SQLite).
+   - autenticar(id, ubicación) -> OK | NO_REGISTRADA | ID_DUPLICADO. Si OK -> DISPONIBLE.
+     La ubicación que envía el Monitor sustituye a la registrada.
+   - marcarFuga(id) -> FUGA (aunque esté FUERA_SERVICIO: la fuga física manda).
+   - resolverFuga(id) -> DISPONIBLE, solo si estaba en FUGA (lo pide la guía).
+   - desconectar(id) -> DESCONECTADA.
+   - getEstaciones(): todas, para el panel.
+   - cambiarEstado (privado): ÚNICO sitio donde cambia un estado; imprime
+     "[hora] [WS-xx] ANTES -> DESPUÉS". Aquí se publicará ESTADO_WS por Kafka.
+   Los métodos que cambian estados son synchronized: autenticar hace "compruebo y
+   luego actúo" y, sin sincronizar, dos Monitors con el mismo ID podrían entrar a la vez.
+   Probado: 50 hilos autenticando WS-01 a la vez -> 1 OK y 49 ID_DUPLICADO.
+   Hay TODO Kafka marcados: PARAR si hay fuga regando, RESUMEN si se desconecta
+   regando, ESTADO_WS en cada cambio.
+
+3) ManejadorMonitor.java  (nuevo) - la conversación con UN Monitor
+   Implementa ManejadorConexion: el SocketServer lo ejecuta en un hilo por Monitor.
+   - Timeout de lectura de 3 s (el Monitor late cada 1 s).
+   - Saludo: espera ENQ y responde ACK; si no empieza con ENQ, corta.
+   - El primer mensaje debe ser AUTH#id#ubicación (3 campos, ubicación no vacía);
+     si no -> AUTH_KO#id#FORMATO_INVALIDO.
+   - Pregunta al registro; si no es OK -> AUTH_KO#id#motivo.
+   - idWS se guarda ANTES de enviar AUTH_OK: si el envío falla, el finally la desconecta.
+   - Bucle: cada mensaje debe ser CODIGO#idWS con el id de ESTA conexión (un Monitor no
+     puede hablar por otra WS). LATIDO no hace nada (recibirlo reinicia el timeout),
+     FUGA y FUGA_RESUELTA llaman al registro, códigos desconocidos se ignoran.
+   Cómo termina y qué se hace (siempre acaba en DESCONECTADA gracias al finally):
+     EOT (null)              -> el Monitor se despide
+     SocketTimeoutException  -> 3 s sin mensajes (red caída, proceso colgado)
+     EOFException            -> conexión cortada sin EOT (Ctrl+C del Monitor)
+     IOException             -> otro error de red
+   Un AUTH rechazado deja idWS = null, así no desconecta a la estación buena que ya
+   estaba conectada con ese ID.
+
+4) WM_Central.java  (modificado)
+   Tras crear los topics: crea el RegistroEstaciones, registra 3 estaciones fijas
+   (TEMPORAL hasta SQLite) y arranca el SocketServer con un ManejadorMonitor.
+   startServer BLOQUEA: cualquier otro hilo (Kafka, panel) debe arrancarse antes.
+   Si el puerto está ocupado -> mensaje claro y exit.
+
+
+BLOQUE C - EL MONITOR (módulo WM_WS, WM_WS_M.java)
+==================================================
+
+Ejecución:  java -jar WM_WS_M.jar <puerto para Engine> <IP:puerto Central> <WS-03> "<ubicación>"
+
+- crearDesdeArgs (sustituye a checkArgs): 4 argumentos, ID con formato WS-\d{2},
+  ubicación no vacía y sin '#'. Devuelve el monitor ya creado.
+- Atributos de instancia y final (antes eran static asignados con this.).
+- central (volatile): conexión actual con la Central, null si no hay.
+- enFuga (volatile): recuerda si hay una fuga activa.
+- start(): lanza el hilo "conexion-central" y deja sitio para el servidor del Engine.
+- bucleConexionCentral(): bucle infinito
+     conectar (ENQ/ACK) + AUTH ->
+        AUTH_OK                         -> publicar conexión, reenviar FUGA si enFuga, latir
+        AUTH_KO NO_REGISTRADA/FORMATO   -> mensaje y terminar (reintentar no lo arregla)
+        AUTH_KO ID_DUPLICADO            -> reintentar (puede ser nuestra conexión vieja,
+                                           que la Central tarda hasta 3 s en soltar)
+        error de red                    -> "Imposible conectar con WM_Central" o
+                                           "Conexión con WM_Central perdida"
+     finally: central = null y disconnect -> esperar 3 s -> repetir
+- latir(): LATIDO#id cada segundo; en cuanto falla un envío, se reconecta.
+- notificarFuga() / notificarFugaResuelta(): métodos públicos que llamará la parte del
+  Engine. Si no hay conexión, la FUGA se reenvía al reconectar.
+  Por qué reenviar: al autenticarse, la Central pone la WS en DISPONIBLE; sin reenvío,
+  tras un corte de red creería disponible una estación con fuga.
+- enviarACentral(): usa una copia local de 'central' porque otro hilo puede ponerla a null.
+
+
+Otros cambios
+-------------
+- simplelogger.properties en src/main/resources de WM_Central, WM_FO y WM_WS:
+  nivel "error" para quitar el ruido INFO/WARN de kafka-clients.
+- En macOS el puerto 5000 lo ocupa el Receptor AirPlay: usar otro (p. ej. 5050).
+
+
+Pruebas realizadas
+------------------
+Central + clientes de prueba (ManejadorMonitor):
+  WS válida (AUTH, LATIDO, FUGA, FUGA_RESUELTA, EOT), WS no registrada, ID duplicado,
+  3 s sin latidos, cierre brusco sin EOT, primer mensaje que no es AUTH,
+  FUGA de otra WS por la misma conexión (ignorada). Todos correctos.
+Central real + Monitor real:
+  - Validación de argumentos (faltan, WS-2, ubicación con #).
+  - Monitor arrancado antes que la Central: reintenta hasta que conecta.
+  - WS-99: el Monitor termina con "NO_REGISTRADA".
+  - Fuga activa -> Central muerta con kill -9 -> Monitor "Conexión perdida", reintenta ->
+    Central reiniciada -> Monitor se autentica y reenvía FUGA -> Central pasa a FUGA.
+  - Monitor muere de golpe -> Central lo marca DESCONECTADA al instante.
+
+
+Decisiones cerradas en estos bloques
+------------------------------------
+- La Central solo acepta WS registradas (la guía pone "WS no registrada" como ejemplo
+  de denegación).
+- Tras resolver una fuga, la WS vuelve a DISPONIBLE directamente (lo dice la guía).
+- Latido cada 1 s; la Central da por caída una WS tras 3 s sin mensajes.
+- El Monitor reintenta la conexión cada 3 s.
+- Nuevo motivo de AUTH_KO: FORMATO_INVALIDO (añadir al documento del protocolo).
+
+
+Pendiente
+---------
+- Jaime: servidor del Monitor para el Engine (SALUD cada 1 s, OK/KO, timeout 2 s) que
+  llame a notificarFuga() / notificarFugaResuelta(). Engine que deje de regar si muere
+  su Monitor.
+- Central: cargar estaciones desde SQLite, Kafka (flujo de riego), panel con colores y
+  menú (iniciar / bloquear / activar).
