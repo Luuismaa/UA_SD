@@ -1,10 +1,11 @@
 package wm.central;
-//Nos permite usar sockets
-import java.net.*;
+
+import java.io.IOException;
 
 import wm.common.interfaces.IKafkaAdmin;
 import wm.common.kafka.KafkaAdmin;
-import wm.common.kafka.Topics; 
+import wm.common.kafka.Topics;
+import wm.common.network.SocketServer;
 
 
 public class WM_Central {
@@ -69,6 +70,26 @@ public class WM_Central {
 					//Esperamos para el próximo intento
 					Thread.sleep(1000L * (intentos+1)); //1s, 2s, 3s (más los timeouts de KafkaAdmin)
 				}
+			}
+
+			//ESTACIONES: todas empiezan DESCONECTADA hasta que su Monitor se autentica
+			RegistroEstaciones registro = new RegistroEstaciones();
+			//TEMPORAL: estaciones fijas hasta que se carguen desde SQLite (rutaDB)
+			registro.registrar("WS-01", "Parque Central");
+			registro.registrar("WS-02", "Jardín Norte");
+			registro.registrar("WS-03", "Paseo del Río");
+			for (Estacion est : registro.getEstaciones()) {
+				System.out.println("[CENTRAL] Estación registrada: " + est);
+			}
+
+			//SOCKETS: un hilo por cada Monitor que se conecte.
+			//startServer BLOQUEA aquí para siempre: cualquier otro hilo (Kafka, panel...) debe arrancarse antes
+			SocketServer servidor = new SocketServer(new ManejadorMonitor(registro));
+			try {
+				servidor.startServer(puertoEscucha);
+			} catch (IOException e) {
+				System.err.println("[CENTRAL] No se puede escuchar en el puerto " + puertoEscucha + ": " + e.getMessage());
+				System.exit(1);
 			}
 		}
 }
