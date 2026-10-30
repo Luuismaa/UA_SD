@@ -3,6 +3,8 @@ package wm.ws.monitor;
 import wm.common.interfaces.INetworkClient;
 import wm.common.network.SocketClient;
 
+import java.io.IOException;
+
 public class WM_WS_M {
     /**
      * Puerto de escucha del servidor de sockets que ofrece a WM_WS_E
@@ -55,17 +57,22 @@ public class WM_WS_M {
     }
 
     private boolean connectToCentral(){
-      networkClient.connect(ipCentral, puertoCentral);
-      String mensajeRegistro = "REGISTRO#" + idWS;
-      System.out.println("Enviando mensaje de registro a la Central: " + mensajeRegistro);
-      networkClient.sendMessage(mensajeRegistro);
-      //Esperamos la respuesta de la Central
-      String respuesta = networkClient.receiveMessage();
-      if(respuesta.equals("OK")) {
-        System.out.println("Registro exitoso en la Central.");
-        return true;
-      } else {
-        System.err.println("Error al registrar en la Central: " + respuesta);
+      try {
+        networkClient.connect(ipCentral, puertoCentral);
+        String mensajeRegistro = "REGISTRO#" + idWS;
+        System.out.println("Enviando mensaje de registro a la Central: " + mensajeRegistro);
+        networkClient.sendMessage(mensajeRegistro);
+        //Esperamos la respuesta de la Central
+        String respuesta = networkClient.receiveMessage();
+        if("OK".equals(respuesta)) {
+          System.out.println("Registro exitoso en la Central.");
+          return true;
+        } else {
+          System.err.println("Error al registrar en la Central: " + respuesta);
+          return false;
+        }
+      } catch (IOException e) {
+        System.err.println("Imposible conectar con WM_Central: " + e.getMessage());
         return false;
       }
     }

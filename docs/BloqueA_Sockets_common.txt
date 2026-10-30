@@ -1,0 +1,123 @@
+WATERMANAGEMENT - BLOQUE A: SOCKETS EN EL MÓDULO COMMON
+=======================================================
+
+Objetivo del bloque
+-------------------
+Dejar en "common" todo lo necesario para la comunicación por sockets, de forma que la
+Central, el Monitor y el Engine usen exactamente el mismo código y hablen igual.
+Se sigue el protocolo recomendado por el enunciado: tramas <STX><DATA><ETX><LRC> con
+diálogo ENQ / ACK / NACK / EOT.
+
+
+Cómo es una conversación (Monitor -> Central)
+---------------------------------------------
+  Monitor                                  Central
+  connect  -------------------------------> accept (nuevo hilo para este cliente)
+  ENQ      ------------------------------->
+           <------------------------------- ACK                (saludo, una vez)
+  [STX]AUTH#WS-03#Parque Central[ETX][LRC] ->
+           <------------------------------- ACK                (LRC correcto)
+           <------- [STX]AUTH_OK#WS-03[ETX][LRC]
+  ACK      ------------------------------->
+  [STX]LATIDO#WS-03[ETX][LRC] ------------>                    (cada segundo)
+           <------------------------------- ACK
+  ...
+  EOT      ------------------------------->                    (despedida ordenada)
+
+La conexión es persistente: se abre una vez y dura mientras la WS está viva.
+Por el socket la Central solo RESPONDE, nunca inicia mensajes (las órdenes van por Kafka).
+
+
+Archivos del bloque
+-------------------
+
+1) protocol/SocketProtocol.java  (modificado)
+   - Añadidos los bytes de control: ENQ (0x05), ACK (0x06), NACK (0x15), EOT (0x04).
+   - Ya tenía STX/ETX, buildFrame (empaquetar), parseFrame (desempaquetar y validar)
+     y calculateLRC.
+   - El LRC es el XOR byte a byte de DATA y también del ETX.
+   - Nota: "lrc = lrc ^ data[i]" no compila porque byte ^ byte da int; hace falta
+     "lrc = (byte)(lrc ^ data[i])". El operador ^= hace ese cast de forma implícita.
+
+2) network/ConexionesTramas.java  (nuevo) - el corazón del protocolo
+   Envuelve un Socket ya abierto y sabe hablar en tramas. La usan cliente y servidor.
+   - enviarByte / leerByte: bytes de control sueltos. leerByte lanza EOFException si
+     el otro extremo cerró la conexión.
+   - enviarMensaje(texto): envía la trama y espera ACK. Si recibe NACK la reenvía
+     (máximo 3 veces). Es synchronized para que dos hilos (p. ej. latido y fuga en el
+     Monitor) no mezclen tramas ni se roben el ACK.
+   - recibirMensaje(): lee STX...ETX+LRC, valida con parseFrame y responde ACK (bien)
+     o NACK (LRC incorrecto). Devuelve el texto, o null si llega EOT.
+   - setTimeout(ms): tiempo máximo de una lectura. La Central lo usará (3 s) para
+     detectar que han dejado de llegar latidos.
+   - cerrar(): cierra el socket (no envía EOT; la despedida se hace aparte).
+   - Límite de 4096 bytes en DATA para no leer basura indefinidamente.
+   - Regla: solo un hilo lee de la conexión; varios pueden enviar.
+   Cómo se distingue cómo termina una conexión:
+     null                    -> el otro lado se despidió (EOT)
+     EOFException            -> se cortó sin despedirse (Ctrl+C, proceso muerto)
+     SocketTimeoutException  -> no llegó nada a tiempo (red caída, proceso colgado)
+
+3) interfaces/INetworkClient.java  (modificado)
+   - connect, sendMessage y receiveMessage declaran "throws IOException".
+     Antes los errores se tragaban y el Monitor fallaba más tarde con NullPointerException.
+     Ahora quien llama se entera y puede reintentar o mostrar
+     "Imposible conectar con WM_Central" (lo exige la guía de corrección).
+
+4) network/SocketClient.java  (modificado)
+   Ya no lee bytes a mano: delega en ConexionesTramas (composición).
+   - connect: abre el socket, envía ENQ y exige ACK; si no, lanza IOException.
+   - sendMessage / receiveMessage: una línea cada uno, delegan en la conexión.
+   - disconnect: envía EOT y cierra; si la conexión ya estaba rota, lo ignora.
+   - comprobarConectado: error claro si se usa sin haber llamado a connect.
+
+5) interfaces/ManejadorConexion.java  (nuevo)
+   Un solo método: void atender(Socket socket). Es "qué hacer con cada cliente".
+   La Central le pasará la lógica de atender un Monitor; el Monitor, la de su Engine.
+
+6) interfaces/INetworkServer.java  (modificado)
+   - startServer declara "throws IOException" (p. ej. puerto ya en uso).
+   - Documentado que startServer BLOQUEA hasta stopServer().
+
+7) network/SocketServer.java  (implementado)
+   Servidor concurrente y genérico: un hilo por cliente.
+   - startServer: bucle accept() -> nuevo hilo con el manejador -> vuelve al accept().
+   - Un fallo al aceptar un cliente se registra y el servidor sigue.
+   - Si el manejador lanza un error inesperado, se captura: no tumba el servidor ni a
+     los demás clientes. El socket se cierra siempre (finally).
+   - stopServer: cierra el ServerSocket (desbloquea el accept) y todas las conexiones.
+   - "activo" es volatile porque stopServer se llama desde otro hilo.
+   - Las conexiones abiertas se guardan en un Set concurrente.
+
+8) protocol/EstadoWS.java  (nuevo)
+   enum con los estados de una WS: DISPONIBLE (verde), REGANDO (verde parpadeante),
+   FUGA (rojo), FUERA_SERVICIO (naranja), DESCONECTADA (gris).
+   EstadoWS.X.name() -> texto;  EstadoWS.valueOf("X") -> enum.
+
+9) WM_WS/.../WM_WS_M.java  (cambio mínimo, solo para que compile)
+   connectToCentral() envuelto en try/catch(IOException). Sigue enviando REGISTRO;
+   el cambio a AUTH#id#ubicacion, el latido y los reintentos van en el bloque C.
+
+
+Pruebas realizadas
+------------------
+- ConexionesTramas: trama correcta -> ACK; trama con LRC alterado -> NACK y reenvío;
+  EOT -> null; cierre brusco -> EOFException.
+- SocketClient contra un servidor mínimo: ENQ/ACK, AUTH -> AUTH_OK, despedida con EOT.
+  Sin servidor -> IOException "Connection refused".
+- SocketServer con 3 clientes a la vez (cada uno tarda 0,5 s): atendidos en ~550 ms
+  en lugar de 1500 ms -> el servidor es concurrente. stopServer detiene el servidor.
+- "mvn clean package" desde la raíz compila los 4 módulos.
+
+
+Decisiones del protocolo cerradas en este bloque
+------------------------------------------------
+- LRC: XOR de DATA + ETX (actualizar el documento del protocolo, que decía solo DATA).
+- Se implementa el diálogo completo ENQ / ACK / NACK / EOT.
+- Máximo 3 reintentos ante NACK.
+
+
+Siguiente: bloque B (Central)
+-----------------------------
+Estacion + RegistroEstaciones (estado compartido), ManejadorMonitor (AUTH, LATIDO,
+FUGA, FUGA_RESUELTA, timeout de 3 s) y arrancar el SocketServer desde WM_Central.

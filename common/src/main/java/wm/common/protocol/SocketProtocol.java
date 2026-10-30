@@ -7,14 +7,28 @@ import java.util.Arrays;
  * <STX><DATA><ETX><LRC>
  */
 public class SocketProtocol{
-    /**
-     * Señal de inicio todo byte previo era basura y que aqui empieza un mensaje nuevo
-     */
-    public static final byte STX = 0x02; // Start of Text
-    /**
-     * Señal de fin
-     */
-    public static final byte ETX = 0x03; // End of Text
+
+    //BYTES DE CONTROL
+
+    //Bytes de diálogo (se envían sueltos)
+
+    //Monitor -> Central. ¿Estás ahí?
+    public static final byte ENQ  = 0x05;
+    //OK. Recibido y correcto
+    public static final byte ACK  = 0x06;
+    //MAL. Mal recibido.
+    public static final byte NACK = 0x15;
+    //FINAL COMUNICACIÓN. Antes del close()
+    public static final byte EOT  = 0x04;
+
+    //Bytes de trama (Envuelven datos)
+    //Aquí empeizan los datos (el mensaje)
+    public static final byte STX = 0x02;
+    //Aquí acaban los datos (el mensaje)
+    public static final byte ETX = 0x03;
+    //[STX][DATA][ETX][LRC]
+
+    
 
     /**
      * Calcula el LRC (Longitudinal Redundancy Check) de un arreglo de bytes.
@@ -25,9 +39,9 @@ public class SocketProtocol{
     public static byte calculateLRC(byte[] data) {
         byte lrc = 0;
         for (int i = 0; i < data.length; i++) {
-            lrc ^= data[i];// XOR de cada byte de DATA (por alguna inexplicable razón la cual no tengo ni idea, si haces lrc = lrc ^ data[i]; no funciona)
+            lrc ^= data[i];// XOR de cada byte de DATA (con ^= se hace cast implícito a Byte y por eso funciona)
         }
-        lrc ^= ETX;//Incluye el byte ETX en el cálculo del LRC (lo mismo pasa en este caso, si haces lrc = lrc ^ ETX; no funciona)
+        lrc ^= ETX;//Incluye el byte ETX en el cálculo del LRC 
         return lrc;
     }
     /**
