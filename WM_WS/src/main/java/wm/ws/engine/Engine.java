@@ -40,6 +40,7 @@ public class Engine {
     /**
      * Indica si la WS está conectada al monitor o no.
      * Se usa para que negarse a regar si no hay conexión con el monitor.
+     */
     private volatile boolean monitorConectado = false;
     /**
      * Constructor de la clase Engine que inicializa los parámetros de configuración.
