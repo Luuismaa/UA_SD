@@ -1,12 +1,16 @@
 package wm.ws.engine;
 import wm.common.interfaces.INetworkClient;
+import wm.common.kafka.Topics;
 import wm.common.network.SocketClient;
 
 import java.io.IOException;
 import java.time.LocalTime;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+
+import org.apache.kafka.common.internals.Topic;
 /**
  * Clase principal del Engine de la WS (WM_WS_E).
  * Se encarga de iniciar el monitor y de conectarse a Kafka.
@@ -29,19 +33,30 @@ public class Engine {
      * Indica si la WS está averiada o no.
      */
     private volatile boolean averiado = false;
+    private volatile boolean regando = false;
     /**
      * Conexión actual con el monitor, ya autenticada. null mientras no estemos conectados.
      */
     private INetworkClient clienteMonitor;
+    private final KafkaEngineManager kafkaManager;
+    private String idWS = null;
     /**
      * Programador de tareas para reintentos de conexión al monitor
      */
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
+    private ScheduledFuture<?> tareaTelemetria;
     /**
      * Indica si la WS está conectada al monitor o no.
      * Se usa para que negarse a regar si no hay conexión con el monitor.
      */
     private volatile boolean monitorConectado = false;
+
+    //Datos de telemetría de riego
+    private double caudalLitrosMin = 10.0;
+    private double volumenAcumuladoLitros = 0.0;
+    private int tiempoRestanteSegundos = 0;
+    private int duracionTotalSegundos = 0;
+
     /**
      * Constructor de la clase Engine que inicializa los parámetros de configuración.
      * @param puertoKafka Puerto de Kafka al que se conectará esta WS
@@ -52,6 +67,7 @@ public class Engine {
         this.puertoKafka = puertoKafka;
         this.ipMonitor = ipMonitor;
         this.puertoMonitor = puertoMonitor;
+        this.kafkaManager = new KafkaEngineManager(puertoKafka);
     }
     /**
      * Inicia el Engine de la WS. Se conecta al monitor y a Kafka.
@@ -62,7 +78,6 @@ public class Engine {
         log("Kafka configurado en: " + puertoKafka);
         //Primer intento de conexión con el monitor, en el hilo del planificador
         scheduler.execute(this::saludMonitor);
-        //Consumidor de kafka para esperar solicitudes de servicio de la central
     }
     /**
      * Alterna el estado de avería de la WS. Si estaba en avería, pasa a disponible; si estaba disponible, pasa a avería.
@@ -87,6 +102,13 @@ public class Engine {
             clienteMonitor.connect(ipMonitor, puertoMonitor);
             monitorConectado = true;
             log("Conectado al monitor en " + ipMonitor + ":" + puertoMonitor);
+            String primerMensaje = clienteMonitor.receiveMessage();
+            if(primerMensaje == null || !primerMensaje.startsWith("IDWS#")){
+                throw new IOException("Respuesta inicial no válida del Monitor: " + primerMensaje);
+            }
+            this.idWS = primerMensaje.split("#")[1];
+            log("Identificador asignado por el monitor: "+ idWS);
+            iniciarEscuchaKafka();
             //Bucle para responder a las peticiones de salud del monitor.
             //receiveMessage bloquea esperando un mensaje: es esperar un evento, no una pausa fija
             while(true){
@@ -104,10 +126,12 @@ public class Engine {
                 clienteMonitor.sendMessage(respuesta);
             }
         }catch(IOException e){
-            monitorConectado = false;
             log("Pérdida de conexión con el monitor: " + e.getMessage() + ". Reintentando en 3s...");
         }finally{
-            monitorConectado = false;
+            if(regando){
+                monitorConectado = false;
+                detenerRiego("PERDIDA_CONEXION_MONITOR");
+            }
             if(clienteMonitor!=null){
                 clienteMonitor.disconnect();
             }
@@ -116,6 +140,80 @@ public class Engine {
             }
         }
     }
+    private void iniciarEscuchaKafka(){
+        log("Iniciando consumidor de kafka para idWS: "+ idWS);
+        kafkaManager.iniciarConsumidor(idWS, (clave, orden) -> {
+            log("Orden recibida desde central: "+ orden);
+        });
+    }
+
+    private void procesarOrden(String orden){
+        String[] partes = orden.split("#");
+        String accion = partes[0];
+        switch(accion){
+            case "INICIAR":
+                int duracion;
+                if(partes.length>1){
+                    duracion=Integer.parseInt(partes[1]);
+                }
+                else{
+                    duracion=60;
+                }
+                iniciarRiego(duracion);
+                break;
+            case "DETENER":
+                detenerRiego("ORDEN_CENTRAL");
+                break;
+            default:
+                log("Orden desconocida recibida por Kafka: " + orden);
+        }
+    }
+
+    private synchronized void iniciarRiego(int duracionSegundos){
+        if(!monitorConectado || averiado){
+            log("Petición de riego RECHAZADA. Monitor conectado: " + monitorConectado + ", Averiado: " + averiado);
+            kafkaManager.enviarMensaje(Topics.FIN_RIEGO, "RECHAZADO#ESTACION_NO_DISPONIBLE");
+            return;
+        }
+        if(regando){
+            log("La estación ya está regando actualmente");
+            return;
+        }
+        regando = true;
+        tiempoRestanteSegundos = duracionSegundos;
+        volumenAcumuladoLitros = 0.0;
+        log("Abirendo electroválvula. Riego iniciado por "+ duracionSegundos + " segundos");
+        kafkaManager.enviarMensaje(Topics.INICIO_RIEGO, "OK#" +duracionSegundos);
+        tareaTelemetria = scheduler.scheduleAtFixedRate(this::emitirTelemetria, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private void emitirTelemetria(){
+        if(!regando || averiado || !monitorConectado){
+            detenerRiego(averiado ? "AVERIA_DETECTADA" : "MONITOR_DESCONECTADO");
+            return;
+        }
+        volumenAcumuladoLitros = volumenAcumuladoLitros + (caudalLitrosMin/60.0);
+        tiempoRestanteSegundos--;
+        String telemetria = String.format("%.2f#%.2f#%d", caudalLitrosMin, volumenAcumuladoLitros, tiempoRestanteSegundos);
+        kafkaManager.enviarMensaje(Topics.ESTADO_RIEGO_WS, telemetria);
+        if(tiempoRestanteSegundos <=0){
+            detenerRiego("TIEMPO_FINALIZADO");
+        }
+    }
+
+    private synchronized void detenerRiego(String motivo){
+        if(!regando){
+            return;
+        }
+        regando = false;
+        if(tareaTelemetria!=null){
+            tareaTelemetria.cancel(false);
+        }
+        int duracionReal = duracionTotalSegundos - Math.max(0, tiempoRestanteSegundos);
+        log("Cerrando electroválvula. Riego detenido. Motivo: "+ motivo + ". Volumen final: " + String.format("%s#%.2f#%d", motivo, volumenAcumuladoLitros, duracionReal));
+
+    }
+
     private void log(String mensaje){
         System.out.println("[" + LocalTime.now().withNano(0) + "] [ENGINE]" + mensaje);
     }
