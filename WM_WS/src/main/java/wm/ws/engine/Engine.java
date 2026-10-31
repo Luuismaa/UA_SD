@@ -52,8 +52,8 @@ public class Engine {
     public void start(){
         log("Iniciando Engine...");
         log("Kafka configurado en: " + puertoKafka);
-        Thread hiloMonitor = new Thread(this::saludMonitor, "conexion-monitor");
-        hiloMonitor.start();
+        //Primer intento de conexión con el monitor, en el hilo del planificador
+        scheduler.execute(this::saludMonitor);
         //Consumidor de kafka para esperar solicitudes de servicio de la central
     }
     /**
@@ -69,39 +69,39 @@ public class Engine {
         }
     }
     /**
-     * Se conecta al monitor y responde a sus peticiones de salud
-     * Si la conexión se pierde, intentan reconectar continuamente
+     * UN intento de conectarse al monitor y responder a sus peticiones de salud.
+     * Si la conexión falla o se pierde, programa el siguiente intento dentro de 3 s y termina:
+     * sin bucle exterior, el método no vuelve a empezar por su cuenta (eso lo hace el planificador).
      */
     private void saludMonitor(){
-        while(true){
-            clienteMonitor = new SocketClient();
-            try{
-                clienteMonitor.connect(ipMonitor, puertoMonitor);
-                log("Conectado al monitor en " + ipMonitor + ":" + puertoMonitor);
-                //Bucle para responder a las peticiones de salud del monitor
-                while(true){
-                    String mensaje = clienteMonitor.receiveMessage();
-                    if(mensaje==null){
-                        throw new IOException("El monitor ha cerrado la conexión");
-                    }
-                    String respuesta;
-                    if(averiado){
-                        respuesta = "KO";
-                    }
-                    else{
-                        respuesta = "OK";
-                    }
-                    clienteMonitor.sendMessage(respuesta);
+        clienteMonitor = new SocketClient();
+        try{
+            clienteMonitor.connect(ipMonitor, puertoMonitor);
+            log("Conectado al monitor en " + ipMonitor + ":" + puertoMonitor);
+            //Bucle para responder a las peticiones de salud del monitor.
+            //receiveMessage bloquea esperando un mensaje: es esperar un evento, no una pausa fija
+            while(true){
+                String mensaje = clienteMonitor.receiveMessage();
+                if(mensaje==null){
+                    throw new IOException("El monitor ha cerrado la conexión");
                 }
-            }catch(IOException e){
-                log("Pérdida de conexión con el monitor: " + e.getMessage() + "Reintentando en 3s...");
-            }finally{
-                if(clienteMonitor!=null){
-                    clienteMonitor.disconnect();
+                String respuesta;
+                if(averiado){
+                    respuesta = "KO";
                 }
-                if(!scheduler.isShutdown()){
-                    scheduler.schedule(this::saludMonitor, 3, TimeUnit.SECONDS);
+                else{
+                    respuesta = "OK";
                 }
+                clienteMonitor.sendMessage(respuesta);
+            }
+        }catch(IOException e){
+            log("Pérdida de conexión con el monitor: " + e.getMessage() + ". Reintentando en 3s...");
+        }finally{
+            if(clienteMonitor!=null){
+                clienteMonitor.disconnect();
+            }
+            if(!scheduler.isShutdown()){
+                scheduler.schedule(this::saludMonitor, 3, TimeUnit.SECONDS);
             }
         }
     }

@@ -5,6 +5,10 @@ import wm.common.network.SocketClient;
 
 import java.io.IOException;
 import java.time.LocalTime;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Monitor de una estación de riego (WM_WS_M).
@@ -54,6 +58,17 @@ public class WM_WS_M {
      */
     private volatile boolean enFuga = false;
     /**
+     * Planificador de tareas: ningún hilo se queda parado esperando. En vez de dormir esperando,
+     * se le pide que ejecute una tarea más tarde (reintento) o cada X tiempo (latido).
+     * Tiene un solo hilo, así que la conexión y el latido nunca se ejecutan a la vez.
+     */
+    private final ScheduledExecutorService planificador = Executors.newSingleThreadScheduledExecutor();
+    /**
+     * Tarea periódica del latido, para poder cancelarla cuando se pierde la conexión.
+     * Solo la usa el hilo del planificador.
+     */
+    private ScheduledFuture<?> tareaLatido;
+    /**
      * Constructor de la clase WM_WS_M que inicializa los parámetros de configuración.
      * @param puertoEscucha Puerto de escucha del servidor de sockets que ofrece a WM_WS_E
      * @param ipCentral IP de la Central a la que se conectará esta WS
@@ -71,88 +86,92 @@ public class WM_WS_M {
 
     public void start(){
       log("Iniciando monitor de la estación " + idWS + " (" + ubicacion + ")");
-      //Rol cliente: la conexión con la Central vive en su propio hilo porque no termina nunca
-      //(conectar, latir, y si se cae, reconectar)
-      Thread hiloCentral = new Thread(this::bucleConexionCentral, "conexion-central");
-      hiloCentral.start();
+      //Rol cliente: primer intento de conexión con la Central, ya en el hilo del planificador
+      planificador.execute(this::intentarConectar);
 
       //Rol servidor: Esperar conexiones de WM_WS_E (siguiente fase, en el puerto puertoEscucha)
     }
 
     /**
-     * Mantiene viva la conexión con la Central para siempre:
-     * conectar + AUTH -> latir cada segundo -> si algo falla, esperar y volver a empezar.
+     * UN intento de conectar y autenticarse en la Central.
+     *  - Si sale bien, programa el latido cada segundo.
+     *  - Si falla, programa el siguiente intento dentro de REINTENTO_MS y termina (no espera).
      */
-    private void bucleConexionCentral(){
-      while (true) {
-        SocketClient cliente = new SocketClient();
-        try {
-          cliente.connect(ipCentral, puertoCentral);
-          cliente.sendMessage("AUTH#" + idWS + "#" + ubicacion);
-          String respuesta = cliente.receiveMessage();
-          if (respuesta == null) {
-            throw new IOException("la Central ha cerrado la conexión sin responder al AUTH");
-          }
-
-          String[] campos = respuesta.split("#", -1);
-          if (campos[0].equals("AUTH_OK")) {
-            log("Autenticada en WM_Central");
-            //Primero publicamos la conexión y después miramos enFuga: si se notifica una fuga
-            //justo en medio, como mucho se envía dos veces (inofensivo), pero nunca se pierde
-            central = cliente;
-            if (enFuga) {
-              log("Fuga todavía activa: se reenvía FUGA a la Central");
-              cliente.sendMessage("FUGA#" + idWS);
-            }
-            latir(cliente); //Solo sale con excepción, cuando la conexión se pierde
-
-          } else if (campos[0].equals("AUTH_KO")) {
-            String motivo = campos.length > 2 ? campos[2] : "DESCONOCIDO";
-            if (!motivo.equals("ID_DUPLICADO")) {
-              //NO_REGISTRADA o FORMATO_INVALIDO: reintentar no lo arregla
-              System.err.println("[" + LocalTime.now().withNano(0) + "] [MONITOR " + idWS + "] WM_Central rechaza la estación: " + motivo + ". Terminando.");
-              cliente.disconnect();
-              System.exit(1);
-            }
-            //ID_DUPLICADO: puede ser nuestra conexión anterior, que la Central tarda hasta 3 s en soltar
-            log("WM_Central indica ID_DUPLICADO. Reintentando en " + (REINTENTO_MS / 1000) + " s...");
-
-          } else {
-            log("Respuesta inesperada al AUTH: '" + respuesta + "'");
-          }
-
-        } catch (IOException e) {
-          if (central == cliente) {
-            log("Conexión con WM_Central perdida (" + e.getMessage() + "). Reintentando en " + (REINTENTO_MS / 1000) + " s...");
-          } else {
-            log("Imposible conectar con WM_Central (" + e.getMessage() + "). Reintentando en " + (REINTENTO_MS / 1000) + " s...");
-          }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-          return;
-        } finally {
-          central = null;
-          cliente.disconnect();
+    private void intentarConectar(){
+      SocketClient cliente = new SocketClient();
+      try {
+        cliente.connect(ipCentral, puertoCentral);
+        cliente.sendMessage("AUTH#" + idWS + "#" + ubicacion);
+        String respuesta = cliente.receiveMessage();
+        if (respuesta == null) {
+          throw new IOException("la Central ha cerrado la conexión sin responder al AUTH");
         }
 
-        try {
-          Thread.sleep(REINTENTO_MS);
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
+        String[] campos = respuesta.split("#", -1);
+        if (campos[0].equals("AUTH_OK")) {
+          log("Autenticada en WM_Central");
+          //Primero publicamos la conexión y después miramos enFuga: si se notifica una fuga
+          //justo en medio, como mucho se envía dos veces (inofensivo), pero nunca se pierde
+          central = cliente;
+          if (enFuga) {
+            log("Fuga todavía activa: se reenvía FUGA a la Central");
+            cliente.sendMessage("FUGA#" + idWS);
+          }
+          //A partir de ahora el planificador envía un LATIDO cada segundo
+          tareaLatido = planificador.scheduleAtFixedRate(this::enviarLatido, LATIDO_MS, LATIDO_MS, TimeUnit.MILLISECONDS);
           return;
+
+        } else if (campos[0].equals("AUTH_KO")) {
+          String motivo = campos.length > 2 ? campos[2] : "DESCONOCIDO";
+          if (!motivo.equals("ID_DUPLICADO")) {
+            //NO_REGISTRADA o FORMATO_INVALIDO: reintentar no lo arregla
+            System.err.println("[" + LocalTime.now().withNano(0) + "] [MONITOR " + idWS + "] WM_Central rechaza la estación: " + motivo + ". Terminando.");
+            cliente.disconnect();
+            System.exit(1);
+          }
+          //ID_DUPLICADO: puede ser nuestra conexión anterior, que la Central tarda hasta 3 s en soltar
+          log("WM_Central indica ID_DUPLICADO. Reintentando en " + (REINTENTO_MS / 1000) + " s...");
+
+        } else {
+          log("Respuesta inesperada al AUTH: '" + respuesta + "'");
         }
+
+      } catch (IOException e) {
+        log("Imposible conectar con WM_Central (" + e.getMessage() + "). Reintentando en " + (REINTENTO_MS / 1000) + " s...");
+      }
+      //Si llegamos aquí, el intento ha fallado
+      central = null;
+      cliente.disconnect();
+      programarReintento();
+    }
+
+    /**
+     * Tarea periódica: envía un LATIDO. Si falla, la conexión se ha perdido: se cancela el
+     * latido y se programa la reconexión.
+     * Importante: no deja escapar ninguna excepción, porque si una tarea de scheduleAtFixedRate
+     * lanza una excepción, el planificador deja de ejecutarla para siempre sin avisar.
+     */
+    private void enviarLatido(){
+      INetworkClient c = central;
+      if (c == null) {
+        return;
+      }
+      try {
+        c.sendMessage("LATIDO#" + idWS);
+      } catch (IOException e) {
+        log("Conexión con WM_Central perdida (" + e.getMessage() + "). Reintentando en " + (REINTENTO_MS / 1000) + " s...");
+        tareaLatido.cancel(false);
+        central = null;
+        c.disconnect();
+        programarReintento();
       }
     }
 
     /**
-     * Envía un LATIDO cada segundo mientras la conexión funcione.
-     * @throws IOException en cuanto un latido no se puede enviar (Central caída o red cortada)
+     * Programa un nuevo intento de conexión dentro de REINTENTO_MS (sin bloquear ningún hilo).
      */
-    private void latir(INetworkClient cliente) throws IOException, InterruptedException {
-      while (true) {
-        Thread.sleep(LATIDO_MS);
-        cliente.sendMessage("LATIDO#" + idWS);
-      }
+    private void programarReintento(){
+      planificador.schedule(this::intentarConectar, REINTENTO_MS, TimeUnit.MILLISECONDS);
     }
 
     /**
