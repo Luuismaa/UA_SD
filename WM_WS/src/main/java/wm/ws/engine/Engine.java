@@ -144,6 +144,7 @@ public class Engine {
         log("Iniciando consumidor de kafka para idWS: "+ idWS);
         kafkaManager.iniciarConsumidor(idWS, (clave, orden) -> {
             log("Orden recibida desde central: "+ orden);
+            procesarOrden(orden);
         });
     }
 
@@ -181,6 +182,7 @@ public class Engine {
         }
         regando = true;
         tiempoRestanteSegundos = duracionSegundos;
+        duracionTotalSegundos = duracionSegundos;
         volumenAcumuladoLitros = 0.0;
         log("Abirendo electroválvula. Riego iniciado por "+ duracionSegundos + " segundos");
         kafkaManager.enviarMensaje(Topics.INICIO_RIEGO, "OK#" +duracionSegundos);
@@ -211,7 +213,7 @@ public class Engine {
         }
         int duracionReal = duracionTotalSegundos - Math.max(0, tiempoRestanteSegundos);
         log("Cerrando electroválvula. Riego detenido. Motivo: "+ motivo + ". Volumen final: " + String.format("%s#%.2f#%d", motivo, volumenAcumuladoLitros, duracionReal));
-
+        kafkaManager.enviarMensaje(Topics.FIN_RIEGO, String.format("%s#%.2f%d", motivo, volumenAcumuladoLitros, duracionReal));
     }
 
     private void log(String mensaje){
