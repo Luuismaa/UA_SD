@@ -33,7 +33,14 @@ public class Engine {
      * Conexión actual con el monitor, ya autenticada. null mientras no estemos conectados.
      */
     private INetworkClient clienteMonitor;
+    /**
+     * Programador de tareas para reintentos de conexión al monitor
+     */
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    /**
+     * Indica si la WS está conectada al monitor o no.
+     * Se usa para que negarse a regar si no hay conexión con el monitor.
+    private volatile boolean monitorConectado = false;
     /**
      * Constructor de la clase Engine que inicializa los parámetros de configuración.
      * @param puertoKafka Puerto de Kafka al que se conectará esta WS
@@ -77,6 +84,7 @@ public class Engine {
             clienteMonitor = new SocketClient();
             try{
                 clienteMonitor.connect(ipMonitor, puertoMonitor);
+                monitorConectado = true;
                 log("Conectado al monitor en " + ipMonitor + ":" + puertoMonitor);
                 //Bucle para responder a las peticiones de salud del monitor
                 while(true){
@@ -94,8 +102,10 @@ public class Engine {
                     clienteMonitor.sendMessage(respuesta);
                 }
             }catch(IOException e){
+                monitorConectado = false;
                 log("Pérdida de conexión con el monitor: " + e.getMessage() + "Reintentando en 3s...");
             }finally{
+                monitorConectado = false;
                 if(clienteMonitor!=null){
                     clienteMonitor.disconnect();
                 }
