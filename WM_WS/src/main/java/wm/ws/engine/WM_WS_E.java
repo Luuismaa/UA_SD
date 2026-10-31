@@ -23,7 +23,9 @@ public class WM_WS_E {
     }
     /**
      * Inicia el Engine de la WS. Se conecta al monitor y a Kafka.
-     * @param args
+     * @param args Argumentos recibidos por consola al iniciar la aplicación. Deben ser: <IP:Puerto Kafka> <IP:Puerto Monitor>
+     * args[0] = IP:Puerto del servidor Kafka al que conectarse.
+     * args[1] = IP:Puerto del monitor al que conectarse.
      */
     public static void main(String[] args){
         checkArgs(args);
