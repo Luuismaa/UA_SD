@@ -1,9 +1,15 @@
 package wm.ws.monitor;
 
 import wm.common.interfaces.INetworkClient;
+import wm.common.network.ConexionesTramas;
 import wm.common.network.SocketClient;
+import wm.common.network.SocketServer;
+import wm.common.protocol.SocketProtocol;
 
+import java.io.EOFException;
 import java.io.IOException;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.time.LocalTime;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -62,12 +68,16 @@ public class WM_WS_M {
      * se le pide que ejecute una tarea más tarde (reintento) o cada X tiempo (latido).
      * Tiene un solo hilo, así que la conexión y el latido nunca se ejecutan a la vez.
      */
-    private final ScheduledExecutorService planificador = Executors.newSingleThreadScheduledExecutor();
+    private final ScheduledExecutorService planificador = Executors.newScheduledThreadPool(2);
     /**
      * Tarea periódica del latido, para poder cancelarla cuando se pierde la conexión.
      * Solo la usa el hilo del planificador.
      */
     private ScheduledFuture<?> tareaLatido;
+    /**
+     * Servidor de sockets que ofrece a WM_WS_E para que se conecte.
+     */
+    private SocketServer engineServer;
     /**
      * Constructor de la clase WM_WS_M que inicializa los parámetros de configuración.
      * @param puertoEscucha Puerto de escucha del servidor de sockets que ofrece a WM_WS_E
@@ -88,10 +98,103 @@ public class WM_WS_M {
       log("Iniciando monitor de la estación " + idWS + " (" + ubicacion + ")");
       //Rol cliente: primer intento de conexión con la Central, ya en el hilo del planificador
       planificador.execute(this::intentarConectar);
-
-      //Rol servidor: Esperar conexiones de WM_WS_E (siguiente fase, en el puerto puertoEscucha)
+      startServer();
+    }
+    /**
+     * Inicia el servidor de sockets que ofrece a WM_WS_E para que se conecte.
+     * Se ejecuta en un hilo aparte para no bloquear el hilo principal.
+     */
+    private void startServer(){
+      engineServer = new SocketServer(this::atenderEngine);
+      new Thread(() -> {
+        try {
+          engineServer.startServer(puertoEscucha);
+        } catch (IOException e) {
+          System.err.println("Error al iniciar el servidor de sockets para WM_WS_E: " + e.getMessage());
+          System.exit(1);
+        }
+      }, "Servidor-Engine").start();
+    }
+    /**
+     * Manejador que ejecutará SocketServer por cada conexión que recibe.
+     * @param socket
+     */
+    private void atenderEngine(Socket socket){
+      String origen = String.valueOf(socket.getRemoteSocketAddress());
+      ScheduledFuture<?> tareaSalud = null;
+      ConexionesTramas conexion = null;
+      try{
+        log("Engine conectado desde " + socket.getRemoteSocketAddress());
+        conexion = new ConexionesTramas(socket);
+        conexion.setTimeout(3000);
+        //Saludo inicial
+        if(conexion.leerByte() != SocketProtocol.ENQ){
+          log("Engine en " + origen + " no ha empezado con ENQ, se cierra la conexión");
+          return;
+        }
+        conexion.enviarByte(SocketProtocol.ACK);
+        //Enviar el ID asignado a la estación
+        conexion.enviarMensaje("IDWS#" + this.idWS);
+        log("Engine conectado desde " + origen + " asignado a " + this.idWS);
+        ejecutarCicloSalud(conexion, origen);
+      }catch(Exception e){
+        log("Error inicial en la conexión con Engine en " + origen + ": " + e.getMessage());
+        if(!enFuga){
+          notificarFuga();
+        }
+        if(conexion!=null){
+          conexion.cerrar();
+        }
+      }
+    }
+    private void ejecutarCicloSalud(ConexionesTramas conexion, String origen){
+      try{
+        conexion.enviarMensaje("SALUD");
+        String respuesta = conexion.recibirMensaje();
+        if(respuesta==null){
+          log("Engine " + idWS + " se ha despedido (EOT)");
+          cerrarConexionEngine(conexion);
+          return;
+        }
+        if("KO".equals(respuesta)){
+          if(!enFuga){
+            log("Engine " + idWS + "responde KO: hay fuga");
+            notificarFuga(); 
+          }
+        }
+        else if("OK".equals(respuesta)){
+          if(enFuga){
+            log("Engine " + idWS + "responde OK: fuga resuelta");
+            notificarFugaResuelta();
+          }
+        }
+        else{
+          log("Engine "+ idWS + "responde inesperado: '" + respuesta + "'");
+        }
+        planificador.schedule(() -> ejecutarCicloSalud(conexion, origen), 1000, TimeUnit.MILLISECONDS);
+      }catch(SocketTimeoutException e){
+        log("Engine " + idWS + " no ha respondido a SALUD en 3 s, se asume avería/fuga");
+        manejarFalloEngine(conexion);
+      }catch(EOFException e){
+        log("Engine " + idWS + " cerró la conexión abruptamente");
+        manejarFalloEngine(conexion);
+      }catch(IOException e){
+        log("Error de comunicación con Engine " + idWS + ": " + e.getMessage());
+        manejarFalloEngine(conexion);
+      }
+    }
+    private void manejarFalloEngine(ConexionesTramas conexion){
+      if(!enFuga){
+        notificarFuga();
+      }
+      cerrarConexionEngine(conexion);
     }
 
+    private void cerrarConexionEngine(ConexionesTramas conexion){
+      if(conexion!= null){
+        conexion.cerrar();
+      }
+    }
     /**
      * UN intento de conectar y autenticarse en la Central.
      *  - Si sale bien, programa el latido cada segundo.
@@ -144,7 +247,7 @@ public class WM_WS_M {
       cliente.disconnect();
       programarReintento();
     }
-
+    
     /**
      * Tarea periódica: envía un LATIDO. Si falla, la conexión se ha perdido: se cancela el
      * latido y se programa la reconexión.
