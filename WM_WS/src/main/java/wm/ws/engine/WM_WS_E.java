@@ -42,6 +42,7 @@ public class WM_WS_E {
         }
         Engine engine = new Engine(puertoKafka, ipMonitor, puertoMonitor);
         engine.start();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> engine.detener()));
         System.out.println("  Pulse [ENTER] para alternar el estado (OK <-> KO)");
         try(Scanner scanner = new Scanner(System.in)){
             while(true){

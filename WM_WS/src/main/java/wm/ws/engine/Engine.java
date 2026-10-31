@@ -219,4 +219,13 @@ public class Engine {
     private void log(String mensaje){
         System.out.println("[" + LocalTime.now().withNano(0) + "] [ENGINE]" + mensaje);
     }
+    public void detener(){
+        log("Apagando Engine...");
+        if(scheduler != null && !scheduler.isShutdown()){
+            scheduler.shutdown();
+        }
+        if(kafkaManager != null){
+            kafkaManager.detener();
+        }
+    }
 }
