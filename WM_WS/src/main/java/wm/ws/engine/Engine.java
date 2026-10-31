@@ -9,7 +9,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.kafka.common.internals.Topic;
 /**
  * Clase principal del Engine de la WS (WM_WS_E).
@@ -34,6 +33,8 @@ public class Engine {
      */
     private volatile boolean averiado = false;
     private volatile boolean regando = false;
+    private volatile boolean bloqueada = false;
+    private String operarioActual = "";
     /**
      * Conexión actual con el monitor, ya autenticada. null mientras no estemos conectados.
      */
@@ -130,7 +131,7 @@ public class Engine {
         }finally{
             if(regando){
                 monitorConectado = false;
-                detenerRiego("PERDIDA_CONEXION_MONITOR");
+                detenerRiego("MONITOR_DESCONECTADO");
             }
             if(clienteMonitor!=null){
                 clienteMonitor.disconnect();
@@ -151,55 +152,90 @@ public class Engine {
     private void procesarOrden(String orden){
         String[] partes = orden.split("#");
         String accion = partes[0];
+        //Verificamos que el mensaje para la estación, comprobando el formato
+        if(partes.length> 1 && !partes[1].equals(this.idWS)){
+            return;
+        }
         switch(accion){
             case "INICIAR":
-                int duracion;
-                if(partes.length>1){
-                    duracion=Integer.parseInt(partes[1]);
+                //Formato: INICIAR#WS-03#FO-12#60
+                if(!bloqueada){
+                    String idFO;
+                    if(partes.length > 2){
+                        idFO=partes[2];
+                    }
+                    else{
+                        idFO = "DESCONOCIDO";
+                    }
+                    int duracion;
+                    if(partes.length > 3){
+                        duracion = Integer.parseInt(partes[3]);
+                    }
+                    else{
+                        duracion = 60;
+                    }
+                    iniciarRiego(duracion, idFO);
+                }
+                break;
+            case "PARAR":
+                // Formato: PARAR#WS-03#FUGA
+                String motivo;
+                if(partes.length>2){
+                    motivo = partes[2];
                 }
                 else{
-                    duracion=60;
+                    motivo="CENTRAL";
                 }
-                iniciarRiego(duracion);
+                detenerRiego(motivo);
                 break;
-            case "DETENER":
-                detenerRiego("ORDEN_CENTRAL");
+            case "BLOQUEAR":
+                //Formato: BLOQUEAR#WS-03
+                bloqueada = true;
+                detenerRiego("BLOQUEO");
+                break;
+            case "ACTIVAR":
+                //Formato: ACTIVAR#WS-03
+                bloqueada = false;
+                log("Estación desbloqueada y lista");
                 break;
             default:
                 log("Orden desconocida recibida por Kafka: " + orden);
         }
     }
 
-    private synchronized void iniciarRiego(int duracionSegundos){
-        if(!monitorConectado || averiado){
-            log("Petición de riego RECHAZADA. Monitor conectado: " + monitorConectado + ", Averiado: " + averiado);
-            kafkaManager.enviarMensaje(Topics.FIN_RIEGO, "RECHAZADO#ESTACION_NO_DISPONIBLE");
-            return;
-        }
-        if(regando){
-            log("La estación ya está regando actualmente");
+    private synchronized void iniciarRiego(int duracionSegundos, String idFO){
+        if(!monitorConectado || averiado || regando || bloqueada){
+            log("Petición de riego ignorada. Monitor conectado: " + monitorConectado + ", Averiado: " + averiado + ", BLoqueada: " + bloqueada);
             return;
         }
         regando = true;
         tiempoRestanteSegundos = duracionSegundos;
         duracionTotalSegundos = duracionSegundos;
         volumenAcumuladoLitros = 0.0;
-        log("Abirendo electroválvula. Riego iniciado por "+ duracionSegundos + " segundos");
-        kafkaManager.enviarMensaje(Topics.INICIO_RIEGO, "OK#" +duracionSegundos);
+        operarioActual = idFO;
+        String timestamp = java.time.LocalDateTime.now().withNano(0).toString();
+        //Formato: INICIO#WS-03#FO-12#2026-10-31T12:04:32
+        String mensajeInicio = String.format("INICIO#%s#%s#%s", idWS, idFO, timestamp);
+
+        log("Abirendo electroválvula. Riego iniciado por "+ duracionSegundos + " segs (Operario: " + idFO + ")");
+        kafkaManager.enviarMensaje(Topics.INICIO_RIEGO, mensajeInicio);
         tareaTelemetria = scheduler.scheduleAtFixedRate(this::emitirTelemetria, 1, 1, TimeUnit.SECONDS);
     }
 
     private void emitirTelemetria(){
         if(!regando || averiado || !monitorConectado){
-            detenerRiego(averiado ? "AVERIA_DETECTADA" : "MONITOR_DESCONECTADO");
+            detenerRiego(averiado ? "FUGA" : "MONITOR_DESCONECTADO");
             return;
         }
         volumenAcumuladoLitros = volumenAcumuladoLitros + (caudalLitrosMin/60.0);
         tiempoRestanteSegundos--;
-        String telemetria = String.format("%.2f#%.2f#%d", caudalLitrosMin, volumenAcumuladoLitros, tiempoRestanteSegundos);
+        // Formato: TELEMETRIA#WS-03#12.4#186.0 (Locale.US para el punto decimal)
+        String telemetria = String.format(java.util.Locale.US, "TELEMETRIA#%s#%.1f#%.1f",
+            idWS, caudalLitrosMin, volumenAcumuladoLitros);
+        
         kafkaManager.enviarMensaje(Topics.ESTADO_RIEGO_WS, telemetria);
         if(tiempoRestanteSegundos <=0){
-            detenerRiego("TIEMPO_FINALIZADO");
+            detenerRiego("TIEMPO");
         }
     }
 
@@ -212,8 +248,13 @@ public class Engine {
             tareaTelemetria.cancel(false);
         }
         int duracionReal = duracionTotalSegundos - Math.max(0, tiempoRestanteSegundos);
-        log("Cerrando electroválvula. Riego detenido. Motivo: "+ motivo + ". Volumen final: " + String.format("%s#%.2f#%d", motivo, volumenAcumuladoLitros, duracionReal));
-        kafkaManager.enviarMensaje(Topics.FIN_RIEGO, String.format("%s#%.2f%d", motivo, volumenAcumuladoLitros, duracionReal));
+        
+        //Formato: FIN#WS-03#TIEMPO#620.0#60
+        String mensajeFin = String.format(java.util.Locale.US, "FIN#%s#%s#%.1f#%d", 
+            idWS, motivo, volumenAcumuladoLitros, duracionReal);
+        
+        log("Cerrando electroválvula. Riego detenido. Motivo: "+ motivo + "-> Mensaje enviado: " + mensajeFin);
+        kafkaManager.enviarMensaje(Topics.FIN_RIEGO, mensajeFin);
     }
 
     private void log(String mensaje){
