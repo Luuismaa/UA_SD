@@ -85,6 +85,7 @@ public class Engine {
         clienteMonitor = new SocketClient();
         try{
             clienteMonitor.connect(ipMonitor, puertoMonitor);
+            monitorConectado = true;
             log("Conectado al monitor en " + ipMonitor + ":" + puertoMonitor);
             //Bucle para responder a las peticiones de salud del monitor.
             //receiveMessage bloquea esperando un mensaje: es esperar un evento, no una pausa fija
@@ -103,8 +104,10 @@ public class Engine {
                 clienteMonitor.sendMessage(respuesta);
             }
         }catch(IOException e){
+            monitorConectado = false;
             log("Pérdida de conexión con el monitor: " + e.getMessage() + ". Reintentando en 3s...");
         }finally{
+            monitorConectado = false;
             if(clienteMonitor!=null){
                 clienteMonitor.disconnect();
             }
