@@ -82,36 +82,6 @@ public class Engine {
      * sin bucle exterior, el método no vuelve a empezar por su cuenta (eso lo hace el planificador).
      */
     private void saludMonitor(){
-<<<<<<< HEAD
-        while(true){
-            clienteMonitor = new SocketClient();
-            try{
-                clienteMonitor.connect(ipMonitor, puertoMonitor);
-                monitorConectado = true;
-                log("Conectado al monitor en " + ipMonitor + ":" + puertoMonitor);
-                //Bucle para responder a las peticiones de salud del monitor
-                while(true){
-                    String mensaje = clienteMonitor.receiveMessage();
-                    if(mensaje==null){
-                        throw new IOException("El monitor ha cerrado la conexión");
-                    }
-                    String respuesta;
-                    if(averiado){
-                        respuesta = "KO";
-                    }
-                    else{
-                        respuesta = "OK";
-                    }
-                    clienteMonitor.sendMessage(respuesta);
-                }
-            }catch(IOException e){
-                monitorConectado = false;
-                log("Pérdida de conexión con el monitor: " + e.getMessage() + "Reintentando en 3s...");
-            }finally{
-                monitorConectado = false;
-                if(clienteMonitor!=null){
-                    clienteMonitor.disconnect();
-=======
         clienteMonitor = new SocketClient();
         try{
             clienteMonitor.connect(ipMonitor, puertoMonitor);
@@ -126,7 +96,6 @@ public class Engine {
                 String respuesta;
                 if(averiado){
                     respuesta = "KO";
->>>>>>> 302bcbe63760506ddbd081f99cb018da4a75cbea
                 }
                 else{
                     respuesta = "OK";
