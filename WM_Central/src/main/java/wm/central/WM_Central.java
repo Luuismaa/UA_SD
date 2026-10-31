@@ -1,6 +1,7 @@
 package wm.central;
 
 import java.io.IOException;
+import java.sql.SQLException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -83,12 +84,20 @@ public class WM_Central {
 			//no está, los Monitors pueden autenticarse igualmente (un fallo solo afecta a su servicio)
 			planificador.execute(WM_Central::inicializarKafka);
 
-			//ESTACIONES: todas empiezan DESCONECTADA hasta que su Monitor se autentica
-			RegistroEstaciones registro = new RegistroEstaciones();
-			//TEMPORAL: estaciones fijas hasta que se carguen desde SQLite (rutaDB)
-			registro.registrar("WS-01", "Parque Central");
-			registro.registrar("WS-02", "Jardín Norte");
-			registro.registrar("WS-03", "Paseo del Río");
+			//BASE DE DATOS + ESTACIONES: se cargan las WS registradas en SQLite. Todas empiezan
+			//DESCONECTADA hasta que su Monitor se autentica (punto 1 de la mecánica)
+			BaseDatos bd = new BaseDatos(rutaDB);
+			RegistroEstaciones registro = new RegistroEstaciones(bd);
+			try {
+				bd.inicializar();
+				for (BaseDatos.DatosEstacion datos : bd.cargarEstaciones()) {
+					registro.registrar(datos.id(), datos.ubicacion(), datos.fueraServicio());
+				}
+			} catch (SQLException e) {
+				//Sin BD la Central no sabe qué estaciones existen: no puede funcionar
+				System.err.println("[BD] No se puede abrir la base de datos '" + rutaDB + "': " + e.getMessage());
+				System.exit(1);
+			}
 			for (Estacion est : registro.getEstaciones()) {
 				System.out.println("[CENTRAL] Estación registrada: " + est);
 			}

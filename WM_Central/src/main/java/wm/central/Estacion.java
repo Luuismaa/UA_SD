@@ -21,9 +21,14 @@ public class Estacion {
     //¿Hay ahora mismo un Monitor conectado y autenticado con este ID?
     private volatile boolean conectada = false;
 
-    public Estacion(String id, String ubicacion) {
+    //¿La ha bloqueado la Central? Se guarda en la BD y sobrevive a reinicios. Mientras esté
+    //bloqueada, al conectarse o al resolver una fuga pasa a FUERA_SERVICIO en vez de DISPONIBLE
+    private volatile boolean bloqueada;
+
+    public Estacion(String id, String ubicacion, boolean bloqueada) {
         this.id = id;
         this.ubicacion = ubicacion;
+        this.bloqueada = bloqueada;
     }
 
     public String getId() {
@@ -42,6 +47,10 @@ public class Estacion {
         return conectada;
     }
 
+    public boolean isBloqueada() {
+        return bloqueada;
+    }
+
     //Setters de paquete: solo los usa RegistroEstaciones
 
     void setUbicacion(String ubicacion) {
@@ -56,8 +65,12 @@ public class Estacion {
         this.conectada = conectada;
     }
 
+    void setBloqueada(boolean bloqueada) {
+        this.bloqueada = bloqueada;
+    }
+
     @Override
     public String toString() {
-        return id + " (" + ubicacion + ") " + estado;
+        return id + " (" + ubicacion + ") " + estado + (bloqueada ? " [bloqueada]" : "");
     }
 }
