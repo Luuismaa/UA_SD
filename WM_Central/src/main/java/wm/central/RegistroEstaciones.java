@@ -29,11 +29,18 @@ public class RegistroEstaciones {
 
     private final Map<String, Estacion> estaciones = new ConcurrentHashMap<>();
 
+    //Donde se guardan los cambios que deben sobrevivir a un reinicio (ubicación y bloqueo)
+    private final BaseDatos bd;
+
+    public RegistroEstaciones(BaseDatos bd) {
+        this.bd = bd;
+    }
+
     /**
      * Da de alta una estación conocida (al arrancar, desde la BD). Empieza DESCONECTADA.
      */
-    public void registrar(String id, String ubicacion) {
-        estaciones.put(id, new Estacion(id, ubicacion));
+    public void registrar(String id, String ubicacion, boolean bloqueada) {
+        estaciones.put(id, new Estacion(id, ubicacion, bloqueada));
     }
 
     /**
@@ -48,13 +55,14 @@ public class RegistroEstaciones {
         if (est.isConectada()) {
             return ResultadoAuth.ID_DUPLICADO;
         }
-        //La WS informa de su ubicación al registrarse: nos quedamos con la que envía
+        //La WS informa de su ubicación al registrarse: nos quedamos con la que envía (y en la BD)
         if (!est.getUbicacion().equals(ubicacion)) {
             log(id, "ubicación actualizada: '" + est.getUbicacion() + "' -> '" + ubicacion + "'");
             est.setUbicacion(ubicacion);
+            bd.actualizarUbicacion(id, ubicacion);
         }
         est.setConectada(true);
-        cambiarEstado(est, EstadoWS.DISPONIBLE);
+        cambiarEstado(est, estadoOperativo(est));
         return ResultadoAuth.OK;
     }
 
@@ -71,7 +79,8 @@ public class RegistroEstaciones {
     }
 
     /**
-     * El Monitor avisa de que la fuga se ha resuelto: la WS vuelve a estar disponible.
+     * El Monitor avisa de que la fuga se ha resuelto: la WS vuelve a estar disponible
+     * (o FUERA_SERVICIO si la Central la tiene bloqueada).
      */
     public synchronized void resolverFuga(String id) {
         Estacion est = estaciones.get(id);
@@ -82,7 +91,52 @@ public class RegistroEstaciones {
             log(id, "FUGA_RESUELTA ignorado: la estación no estaba en FUGA (" + est.getEstado() + ")");
             return;
         }
-        cambiarEstado(est, EstadoWS.DISPONIBLE);
+        cambiarEstado(est, estadoOperativo(est));
+    }
+
+    /**
+     * La Central bloquea la estación: queda FUERA_SERVICIO (también tras reiniciar la Central).
+     * Si está desconectada, se guarda el bloqueo y se aplicará cuando se conecte.
+     * Si tiene una fuga, sigue en FUGA y pasará a FUERA_SERVICIO al resolverse.
+     */
+    public synchronized void bloquear(String id) {
+        Estacion est = estaciones.get(id);
+        if (est == null) {
+            return;
+        }
+        est.setBloqueada(true);
+        bd.guardarBloqueo(id, true);
+        //TODO Kafka: publicar BLOQUEAR#id (si estaba REGANDO, el Engine para con motivo BLOQUEO)
+        if (est.isConectada() && est.getEstado() != EstadoWS.FUGA) {
+            cambiarEstado(est, EstadoWS.FUERA_SERVICIO);
+        } else {
+            log(id, "bloqueada (se aplicará al conectarse o al resolver la fuga)");
+        }
+    }
+
+    /**
+     * La Central reactiva una estación bloqueada.
+     */
+    public synchronized void activar(String id) {
+        Estacion est = estaciones.get(id);
+        if (est == null) {
+            return;
+        }
+        est.setBloqueada(false);
+        bd.guardarBloqueo(id, false);
+        //TODO Kafka: publicar ACTIVAR#id
+        if (est.getEstado() == EstadoWS.FUERA_SERVICIO) {
+            cambiarEstado(est, EstadoWS.DISPONIBLE);
+        } else {
+            log(id, "activada");
+        }
+    }
+
+    /**
+     * Estado de una estación conectada y sin fuga: DISPONIBLE, o FUERA_SERVICIO si está bloqueada.
+     */
+    private EstadoWS estadoOperativo(Estacion est) {
+        return est.isBloqueada() ? EstadoWS.FUERA_SERVICIO : EstadoWS.DISPONIBLE;
     }
 
     /**
