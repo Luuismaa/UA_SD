@@ -9,5 +9,9 @@ import wm.common.kafka.Topics;
  * KafkaEngineManager
  */
 public class KafkaEngineManager {
-    
+    private final String direccionKafka;
+    private String idWS;
+    private KafkaProducer<String, String> producer;
+    private KafkaConsumer<String, String> consumer;
+    private volatile boolean running = true;
 }
