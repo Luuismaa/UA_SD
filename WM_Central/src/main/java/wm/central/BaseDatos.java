@@ -178,6 +178,66 @@ public class BaseDatos {
     }
 
     /**
+     * Datos de un riego que se empezó y todavía no tiene fin (sobrevive a un reinicio de la Central).
+     */
+    public record RiegoAbierto(long id, String solicitante, String inicio) { }
+
+    /**
+     * Registra el comienzo de un riego (cuando la WS confirma con INICIO).
+     * Se guarda ya al empezar (con fin = NULL): si la Central se cae a mitad, el riego no se pierde.
+     * @return id del riego en la BD, o -1 si no se ha podido guardar
+     */
+    public synchronized long iniciarRiego(String idWS, String solicitante, String inicio) {
+        try (PreparedStatement ps = con.prepareStatement(
+                "INSERT INTO riego (id_ws, solicitante, inicio) VALUES (?, ?, ?)", Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, idWS);
+            ps.setString(2, solicitante);
+            ps.setString(3, inicio);
+            ps.executeUpdate();
+            try (ResultSet rs = ps.getGeneratedKeys()) {
+                return rs.next() ? rs.getLong(1) : -1;
+            }
+        } catch (SQLException e) {
+            error("guardar el inicio del riego de " + idWS, e);
+            return -1;
+        }
+    }
+
+    /**
+     * Cierra un riego con su resultado final (cuando llega FIN, o la Central lo da por terminado).
+     */
+    public synchronized void finalizarRiego(long id, String fin, int duracionS, double volumen, String motivo) {
+        try (PreparedStatement ps = con.prepareStatement(
+                "UPDATE riego SET fin = ?, duracion_s = ?, volumen = ?, motivo = ? WHERE id = ?")) {
+            ps.setString(1, fin);
+            ps.setInt(2, duracionS);
+            ps.setDouble(3, volumen);
+            ps.setString(4, motivo);
+            ps.setLong(5, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            error("cerrar el riego " + id, e);
+        }
+    }
+
+    /**
+     * El último riego sin cerrar de una estación, o null si no hay. Sirve para que, tras un
+     * reinicio, la Central sepa a quién enviar el RESUMEN de un riego que empezó antes de caerse.
+     */
+    public synchronized RiegoAbierto buscarRiegoAbierto(String idWS) {
+        try (PreparedStatement ps = con.prepareStatement(
+                "SELECT id, solicitante, inicio FROM riego WHERE id_ws = ? AND fin IS NULL ORDER BY id DESC LIMIT 1")) {
+            ps.setString(1, idWS);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? new RiegoAbierto(rs.getLong("id"), rs.getString("solicitante"), rs.getString("inicio")) : null;
+            }
+        } catch (SQLException e) {
+            error("buscar el riego abierto de " + idWS, e);
+            return null;
+        }
+    }
+
+    /**
      * Un fallo de escritura no debe tumbar la Central: se registra y se sigue.
      */
     private void error(String accion, SQLException e) {

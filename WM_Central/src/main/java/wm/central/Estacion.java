@@ -25,6 +25,11 @@ public class Estacion {
     //bloqueada, al conectarse o al resolver una fuga pasa a FUERA_SERVICIO en vez de DISPONIBLE
     private volatile boolean bloqueada;
 
+    //Datos del riego en curso para el panel (llegan con la telemetría de la WS)
+    private volatile double caudal = 0.0;      //L/min
+    private volatile double volumen = 0.0;     //L acumulados (se queda el del último riego)
+    private volatile String operario = null;   //quién lo pidió: FO-xx, MANUAL o CENTRAL
+
     public Estacion(String id, String ubicacion, boolean bloqueada) {
         this.id = id;
         this.ubicacion = ubicacion;
@@ -51,6 +56,18 @@ public class Estacion {
         return bloqueada;
     }
 
+    public double getCaudal() {
+        return caudal;
+    }
+
+    public double getVolumen() {
+        return volumen;
+    }
+
+    public String getOperario() {
+        return operario;
+    }
+
     //Setters de paquete: solo los usa RegistroEstaciones
 
     void setUbicacion(String ubicacion) {
@@ -67,6 +84,18 @@ public class Estacion {
 
     void setBloqueada(boolean bloqueada) {
         this.bloqueada = bloqueada;
+    }
+
+    void setCaudal(double caudal) {
+        this.caudal = caudal;
+    }
+
+    void setVolumen(double volumen) {
+        this.volumen = volumen;
+    }
+
+    void setOperario(String operario) {
+        this.operario = operario;
     }
 
     @Override

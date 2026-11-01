@@ -165,11 +165,9 @@ public class WM_Central extends JFrame {
 				// Publicación periódica del estado de la central a operarios (cada 5s)
 				planificador.scheduleAtFixedRate(() -> {
 					for (Estacion est : registro.getEstaciones()) {
-						String msg = String.format("ESTADO_WS#%s#%s#%s", est.getId(), est.getUbicacion(), est.getEstado().name());
-						kafkaManager.publicarEvento(Topics.ESTADO_GLOBAL_WS, est.getId(), msg);
+						kafkaManager.publicarEstado(est);
 					}
 				}, 0, 5, TimeUnit.SECONDS);
-				//Aquí se arrancarán los consumidores/productores de Kafka cuando existan
 			} catch (Exception e) {
 				System.out.println("[KAFKA] No se ha podido conectar con Kafka (intento " + intentosKafka + "). Reintentando en " + REINTENTO_KAFKA_S + " s...");
 				planificador.schedule(this::inicializarKafka, REINTENTO_KAFKA_S, TimeUnit.SECONDS);
@@ -193,14 +191,13 @@ public class WM_Central extends JFrame {
 			modeloTabla.setRowCount(0);
 			int nuevaSel = -1;
 			for(Estacion est: registro.getEstaciones()){
-				String operario = kafkaManager != null ? kafkaManager.getOperarioRegando(est.getId()): null;
-				if(operario ==null) operario = "-";
+				String operario = est.getOperario() != null ? est.getOperario() : "-";
 				modeloTabla.addRow(new Object[]{
 					est.getId(),
 					est.getUbicacion(),
 					est.getEstado(),
-					"0.0",
-					"0",
+					String.format(java.util.Locale.ROOT, "%.1f", est.getCaudal()),
+					String.format(java.util.Locale.ROOT, "%.1f", est.getVolumen()),
 					operario
 				});
 				if(est.getId().equals(idSel)){
@@ -237,7 +234,8 @@ public class WM_Central extends JFrame {
 				try {
 					int duracion = Integer.parseInt(input.trim());
 					log("[CENTRAL] Solicitando riego manual en " + id + " por " + duracion + "s.");
-					kafkaManager.publicarEvento(Topics.SOLICITAR_RIEGO, id, "CENTRAL#" + id + "#" + duracion);
+					//Protocolo: SOLICITUD#CENTRAL#<idWS>#<duracion>. Pasa por la misma validación que un FO
+					kafkaManager.publicarEvento(Topics.SOLICITAR_RIEGO, id, "SOLICITUD#CENTRAL#" + id + "#" + duracion);
 				} catch (NumberFormatException ex) {
 					JOptionPane.showMessageDialog(this, "La duración debe ser un número entero.", "Error", JOptionPane.ERROR_MESSAGE);
 				}
