@@ -1,19 +1,13 @@
 services:
   monitor:
-    build:
-      context: .
-      dockerfile: WM_WS/Dockerfile
-    # Eliminado container_name fijo
+    image: luuiss/wm-ws:latest
     # El orden ahora es: <puerto Engine> <IP:puerto Central> <ID> <ubicación>
-    command: ["java", "-jar", "monitor.jar", "6000", "${CENTRAL_IP:-ELASTIC_IP}:5050", "${ID_WS:-WS-01}", "${UBICACION:-ZONA_A}"]
+    command: ["java", "-jar", "monitor.jar", "6000", "${CENTRAL_IP:-184.194.154.93}:5050", "${ID_WS:-WS-01}", "${UBICACION:-ZONA_A}"]
 
   engine:
-    build:
-      context: .
-      dockerfile: WM_WS/Dockerfile
+    image: luuiss/wm-ws:latest
     depends_on:
       - monitor
-    # Eliminado container_name fijo
     stdin_open: true 
     tty: true        
-    command: ["java", "-jar", "engine.jar", "${KAFKA_IP:-ELASTIC_IP}:9092", "monitor:6000"]
+    command: ["java", "-jar", "engine.jar", "${KAFKA_IP:-18.211.92.44}:9092", "monitor:6000"]
