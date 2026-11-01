@@ -1,0 +1,81 @@
+Q: puedes explicar como funciona javax.swing? que metodos tiene y como implementarlos?
+javax.swing es una biblioteca estándar de Java utilizada para crear interfaces gráficas de usuario (GUI) de escritorio. Funciona mediante una arquitectura orientada a componentes y basada en eventos, donde cada elemento visual (botones, ventanas, textos) es un objeto, y las interacciones del usuario (clics, pulsaciones de teclas) generan eventos que el código debe capturar y procesar.
+
+Swing no es thread-safe, lo que significa que todas las creaciones y modificaciones de la interfaz gráfica deben ejecutarse dentro de un hilo específico llamado Event Dispatch Thread (EDT).
+Clases y Componentes Principales
+
+Swing se divide en contenedores (que agrupan otros elementos) y controles (elementos interactivos).
+
+    JFrame: La ventana principal de la aplicación. Contiene el marco, la barra de título y los botones de minimizar/cerrar.
+
+    JPanel: Un contenedor invisible que sirve para agrupar y organizar otros componentes dentro de un JFrame.
+
+    JButton: Un botón pulsable.
+
+    JLabel: Una etiqueta para mostrar texto o imágenes no editables por el usuario.
+
+    JTextField / JTextArea: Cajas de texto para que el usuario introduzca datos (una línea o múltiples líneas, respectivamente).
+
+    JTable: Una tabla para mostrar datos en filas y columnas.
+
+Métodos Fundamentales
+
+Debido a que Swing está basado en objetos, interactúas con los componentes a través de sus métodos de instancia.
+
+    setSize(int width, int height): Define las dimensiones de un componente o ventana en píxeles.
+
+    setDefaultCloseOperation(int operation): Determina qué sucede al cerrar la ventana. Usualmente se le pasa JFrame.EXIT_ON_CLOSE para terminar el programa completo.
+
+    setLayout(LayoutManager mgr): Define el gestor de diseño. Los gestores (BorderLayout, GridLayout, FlowLayout) calculan automáticamente dónde colocar los componentes sin usar coordenadas absolutas.
+
+    add(Component comp): Añade un botón, texto o panel dentro de un contenedor.
+
+    setVisible(boolean b): Muestra (si es true) u oculta la ventana. Debe llamarse siempre al final, después de añadir todos los componentes.
+
+    addActionListener(ActionListener l): Asigna un "escuchador" a un componente interactivo (como un botón) para ejecutar un bloque de código cuando el usuario interactúe con él.
+
+Ejemplo de Implementación
+
+Este ejemplo crea una ventana básica con un botón que, al ser pulsado, cambia el texto de una etiqueta.
+Java
+
+import javax.swing.*;
+import java.awt.*;
+
+public class EjemploSwing {
+
+    public static void main(String[] args) {
+        // SwingUtilities.invokeLater asegura que la GUI se construya en el EDT
+        SwingUtilities.invokeLater(() -> {
+            crearYMostrarGUI();
+        });
+    }
+
+    private static void crearYMostrarGUI() {
+        // 1. Crear el contenedor principal (Ventana)
+        JFrame ventana = new JFrame("Mi Aplicación Swing");
+        ventana.setSize(400, 200);
+        ventana.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        
+        // 2. Establecer un Layout (Gestor de diseño)
+        ventana.setLayout(new FlowLayout());
+
+        // 3. Crear los componentes
+        JLabel etiqueta = new JLabel("Presiona el botón para continuar.");
+        JButton boton = new JButton("Hacer Clic");
+
+        // 4. Añadir interactividad (Gestión de eventos)
+        boton.addActionListener(evento -> {
+            // Este código se ejecuta al hacer clic en el botón
+            etiqueta.setText("¡El botón fue pulsado!");
+            boton.setEnabled(false); // Desactiva el botón tras el clic
+        });
+
+        // 5. Añadir los componentes a la ventana
+        ventana.add(etiqueta);
+        ventana.add(boton);
+
+        // 6. Hacer visible la ventana
+        ventana.setVisible(true);
+    }
+}

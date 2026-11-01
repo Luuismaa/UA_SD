@@ -1,0 +1,81 @@
+Q:puedes explicar como funciona composer.yml que tiene y como implementarlo?
+Un archivo docker-compose.yml (o simplemente compose.yaml) es un archivo en formato YAML utilizado por la herramienta Docker Compose. Su función principal es definir y ejecutar aplicaciones Docker de múltiples contenedores.
+
+En lugar de tener que escribir largos comandos docker run ... en la terminal para levantar cada contenedor uno por uno y conectarlos manualmente, escribes toda la configuración en este archivo y levantas toda tu infraestructura con un solo comando.
+Estructura y Elementos Principales
+
+El archivo se organiza jerárquicamente mediante indentación (espacios). Sus bloques fundamentales son:
+
+    services: Es el bloque principal. Aquí defines cada uno de los contenedores que forman tu aplicación (por ejemplo, la base de datos, el servidor web, Kafka, etc.). Cada servicio se convertirá en un contenedor.
+
+    image: Indica qué imagen base usar (ej. postgres:15). Se descargará de Docker Hub si no la tienes.
+
+    build: Si en lugar de descargar una imagen prefieres construirla tú mismo desde un Dockerfile, usas esta etiqueta indicando la ruta del directorio (ej. build: .).
+
+    ports: Mapea los puertos de tu máquina física (host) con los del contenedor. El formato siempre es "puerto_host:puerto_contenedor".
+
+    environment: Permite inyectar variables de entorno dentro del contenedor (credenciales, rutas, configuraciones).
+
+    volumes: Sirve para persistir datos. Conecta una carpeta de tu ordenador físico con una del contenedor para que la información (como una base de datos) no se borre si el contenedor se destruye.
+
+    depends_on: Establece el orden de arranque. Le dice a Docker Compose: "no inicies este servicio hasta que este otro ya esté encendido".
+
+    networks: Crea redes virtuales privadas para que los contenedores puedan hablar entre sí usando el nombre del servicio como si fuera un dominio (ej. la central puede conectarse al broker haciendo ping a kafka:9092).
+
+Ejemplo de Implementación (Kafka + Central)
+
+Aplicado al contexto de tu proyecto, así se vería un docker-compose.yml para levantar la base de datos, Kafka (junto con Zookeeper) y tu Central de Riego, todo conectado:
+YAML
+
+version: '3.8' # Versión de la sintaxis (opcional en versiones modernas)
+
+services:
+  # 1. Servicio de Zookeeper (Necesario para que Kafka funcione)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  # 2. Servicio de Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+
+  # 3. Tu aplicación (Central)
+  wm-central:
+    build: . # Busca el Dockerfile en la misma carpeta para construir la imagen
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080" # El puerto por donde escuchan las WS
+    environment:
+      - PUERTO_ESCUCHA=8080
+      - BROKER_KAFKA=kafka:9092
+
+Cómo implementarlo y ejecutarlo
+
+    Crear el archivo: En la carpeta principal de tu proyecto (donde también está tu Dockerfile), crea un archivo de texto llamado exactamente docker-compose.yml.
+
+    Levantar los servicios: Abre la terminal en esa carpeta y ejecuta:
+    Bash
+
+    docker compose up -d
+
+    (El flag -d significa "detached", levantando los contenedores en segundo plano para que puedas seguir usando esa terminal).
+
+    Ver los logs: Si quieres ver qué está pasando por consola en todos los contenedores al mismo tiempo:
+    Bash
+
+    docker compose logs -f
+
+    Apagar todo: Para detener y destruir todos los contenedores y redes creadas de un plumazo:
+    Bash
+
+    docker compose down
