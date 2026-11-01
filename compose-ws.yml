@@ -1,0 +1,21 @@
+services:
+  monitor:
+    build:
+      context: .
+      dockerfile: WM_WS/Dockerfile
+    container_name: wm-ws-m
+    # Argumentos asumiendo: <ID_WS> <IP_Central:Puerto> <Puerto_Local>
+    command: ["java", "-jar", "monitor.jar", "${ID_WS:-WS-01}", "${CENTRAL_IP:-ELASTIC_IP}:5050", "6000"]
+
+  engine:
+    build:
+      context: .
+      dockerfile: WM_WS/Dockerfile
+    container_name: wm-ws-e
+    depends_on:
+      - monitor
+    # Imprescindible para poder usar el menú manual por teclado
+    stdin_open: true 
+    tty: true        
+    # Argumentos: <IP_Kafka:Puerto> <IP_Monitor:Puerto>
+    command: ["java", "-jar", "engine.jar", "${KAFKA_IP:-ELASTIC_IP}:9092", "monitor:6000"]
