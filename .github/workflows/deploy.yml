@@ -1,0 +1,49 @@
+# CI/CD (tutorial AWS del profesor, paso 2): VS Code -> GitHub -> Docker Hub -> AWS
+#
+# Cada push a master construye las imágenes Docker de los tres módulos y las sube a Docker Hub.
+# Después, en AWS solo hay que descargar la nueva imagen (docker pull) y reiniciar el contenedor.
+#
+# Secrets necesarios en GitHub (Settings > Secrets and variables > Actions):
+#   DOCKER_USERNAME  usuario de Docker Hub
+#   DOCKER_PASSWORD  contraseña (o mejor, un Access Token de Docker Hub)
+
+name: Build y push de imagenes a Docker Hub
+
+on:
+  push:
+    branches:
+      - master            # rama que se despliega (en develop se trabaja sin desplegar)
+  workflow_dispatch:      # botón "Run workflow" en GitHub para lanzarlo a mano
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      # Una ejecución por módulo, en paralelo. Si falla uno, los demás siguen
+      fail-fast: false
+      matrix:
+        include:
+          - modulo: WM_Central    # se ejecuta en AWS
+            imagen: wm-central
+          - modulo: WM_WS         # Monitor + Engine, en los PCs del laboratorio
+            imagen: wm-ws
+          - modulo: WM_FO         # operario, en los PCs del laboratorio
+            imagen: wm-fo
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Iniciar sesión en Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # El contexto es la raíz del repo: cada Dockerfile necesita el pom padre y el módulo common
+      - name: Construir y subir ${{ matrix.imagen }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.modulo }}/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.imagen }}:latest
