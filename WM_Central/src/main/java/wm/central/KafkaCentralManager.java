@@ -40,8 +40,10 @@ import wm.common.kafka.Topics;
 public class KafkaCentralManager {
     //Si la WS no confirma con INICIO en este tiempo, el riego se deniega
     private static final int TIMEOUT_INICIO_S = 5;
-    //Una SOLICITUD más antigua que esto se publicó con la Central caída: no se admite
+    //Una SOLICITUD (o un INICIO) más antiguo que esto se publicó con la Central caída
     private static final long ANTIGUEDAD_MAX_SOLICITUD_MS = 10_000;
+    //Tras resolverse una fuga con un riego sin cerrar, tiempo que se espera el FIN del Engine
+    private static final int MARGEN_FIN_TRAS_FUGA_S = 5;
 
     private final String broker;
     private final RegistroEstaciones registro;
@@ -103,6 +105,11 @@ public class KafkaCentralManager {
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        //Si la Central se cae de golpe, Kafka tarda session.timeout.ms en dar por muerto al consumidor
+        //anterior, y mientras tanto la Central reiniciada no recibe nada. Por defecto son 45 s;
+        //6 s es el mínimo que admite el broker
+        props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 6000);
+        props.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 2000);
 
         this.consumer = new KafkaConsumer<>(props);
         consumer.subscribe(Arrays.asList(
@@ -139,7 +146,7 @@ public class KafkaCentralManager {
         String mensaje = record.value();
         switch(record.topic()){
             case Topics.SOLICITAR_RIEGO -> procesarSolicitudRiego(mensaje, record.timestamp());
-            case Topics.INICIO_RIEGO -> procesarInicioRiego(mensaje);
+            case Topics.INICIO_RIEGO -> procesarInicioRiego(mensaje, record.timestamp());
             case Topics.ESTADO_RIEGO_WS -> procesarTelemetriaWS(mensaje);
             case Topics.FIN_RIEGO -> procesarFinRiego(mensaje);
         }
@@ -219,13 +226,19 @@ public class KafkaCentralManager {
     /**
      * INICIO#idWS#solicitante#fechaHora: la WS ha abierto la electroválvula.
      */
-    private void procesarInicioRiego(String mensaje){
+    private void procesarInicioRiego(String mensaje, long timestamp){
         String[] partes = mensaje.split("#", -1);
         if(partes.length != 4 || !partes[0].equals("INICIO")){
             log("INICIO con formato incorrecto, descartado: '" + mensaje + "'");
             return;
         }
         String idWS = partes[1];
+        //INICIO antiguo que se lee al reiniciar la Central: ese riego ya está guardado en la BD (o
+        //acabó). No se ordena PARAR: la guía dice que las WS siguen regando aunque caiga la Central
+        if(System.currentTimeMillis() - timestamp > ANTIGUEDAD_MAX_SOLICITUD_MS){
+            log("INICIO antiguo de " + idWS + " (de antes de arrancar la Central): se ignora");
+            return;
+        }
         String solicitante = regandoOperarios.get(idWS);
         //Llega tarde (ya se denegó por timeout) o nadie lo pidió: la Central manda parar
         if(!pendientesInicio.remove(idWS) || solicitante == null){
@@ -260,8 +273,14 @@ public class KafkaCentralManager {
             return;
         }
         String idWS = partes[1];
-        registro.actualizarTelemetria(idWS, Double.parseDouble(partes[2]), Double.parseDouble(partes[3]));
         String solicitante = solicitanteDe(idWS);
+        //Tras un reinicio de la Central, la WS se autentica como DISPONIBLE aunque siga regando:
+        //si la BD dice que tiene un riego abierto, se vuelve a mostrar como REGANDO
+        Estacion est = registro.getEstacion(idWS);
+        if(solicitante != null && est != null && est.getEstado() == wm.common.protocol.EstadoWS.DISPONIBLE){
+            registro.iniciarRiego(idWS, solicitante);
+        }
+        registro.actualizarTelemetria(idWS, Double.parseDouble(partes[2]), Double.parseDouble(partes[3]));
         if(esOperario(solicitante)){
             publicarEvento(Topics.ESTADO_RIEGO_FO, solicitante,
                 "TELEMETRIA#" + solicitante + "#" + idWS + "#" + partes[2] + "#" + partes[3]);
@@ -333,15 +352,50 @@ public class KafkaCentralManager {
      * Central cierra el riego con los últimos datos recibidos y motivo CENTRAL (flujo 5).
      */
     public void alDesconectarEstacion(String idWS){
-        if(!regandoOperarios.containsKey(idWS) || pendientesInicio.contains(idWS)){
+        if(!tieneRiegoEnCurso(idWS)){
             //Sin riego, o aún no había empezado (el timeout de 5 s lo denegará)
             return;
         }
+        cerrarConUltimosDatos(idWS, "CENTRAL");
+    }
+
+    /**
+     * Llamado por el registro cuando el Monitor avisa de que la fuga se ha resuelto.
+     * Si el riego sigue abierto es porque el Engine se cayó a mitad y nunca envió su FIN.
+     * Se le da un margen para que, al recuperarse, envíe el estado final del riego (guía);
+     * si no lo hace, la Central lo cierra con los últimos datos recibidos, avisa al FO con el
+     * RESUMEN y la estación queda libre para nuevos riegos.
+     */
+    public void alResolverFuga(String idWS){
+        if(!tieneRiegoEnCurso(idWS)){
+            return;
+        }
+        log(idWS + ": fuga resuelta con un riego sin cerrar (el Engine pudo caerse). Esperando su FIN " + MARGEN_FIN_TRAS_FUGA_S + " s...");
+        scheduler.schedule(() -> {
+            if(tieneRiegoEnCurso(idWS)){
+                log(idWS + ": el Engine no ha enviado el FIN, la Central cierra el riego con los últimos datos");
+                cerrarConUltimosDatos(idWS, "FUGA");
+            }
+        }, MARGEN_FIN_TRAS_FUGA_S, TimeUnit.SECONDS);
+    }
+
+    /**
+     * ¿Hay un riego ya empezado (con INICIO) en esta estación?
+     */
+    private boolean tieneRiegoEnCurso(String idWS){
+        return regandoOperarios.containsKey(idWS) && !pendientesInicio.contains(idWS);
+    }
+
+    /**
+     * Cierra el riego con lo último que se sabe: el volumen de la última telemetría y el tiempo
+     * transcurrido desde el INICIO. Se usa cuando la WS ya no puede enviar su FIN.
+     */
+    private void cerrarConUltimosDatos(String idWS, String motivo){
         Estacion est = registro.getEstacion(idWS);
         double volumen = est != null ? est.getVolumen() : 0.0;
         LocalDateTime inicio = iniciosRiego.get(idWS);
         int duracion = inicio != null ? (int) Duration.between(inicio, LocalDateTime.now()).getSeconds() : 0;
-        cerrarRiego(idWS, "CENTRAL", volumen, duracion);
+        cerrarRiego(idWS, motivo, volumen, duracion);
     }
 
     /**
@@ -356,6 +410,12 @@ public class KafkaCentralManager {
                 solicitante = abierto.solicitante();
                 regandoOperarios.put(idWS, solicitante);
                 riegosBD.put(idWS, abierto.id());
+                //Hora de inicio guardada en la BD, para calcular la duración si hay que cerrarlo
+                try {
+                    iniciosRiego.putIfAbsent(idWS, LocalDateTime.parse(abierto.inicio()));
+                } catch (RuntimeException e) {
+                    //Fecha con otro formato: la duración se calculará como 0
+                }
             }
         }
         return solicitante;

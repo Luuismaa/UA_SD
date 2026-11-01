@@ -108,6 +108,11 @@ public class RegistroEstaciones {
             log(id, "FUGA_RESUELTA ignorado: la estación no estaba en FUGA (" + est.getEstado() + ")");
             return;
         }
+        //Si el Engine se cayó a mitad de riego, ese riego sigue abierto: el gestor Kafka lo cierra
+        KafkaCentralManager k = kafkaManager;
+        if (k != null) {
+            k.alResolverFuga(id);
+        }
         cambiarEstado(est, estadoOperativo(est));
     }
 
