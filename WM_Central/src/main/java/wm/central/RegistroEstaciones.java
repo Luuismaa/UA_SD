@@ -1,5 +1,6 @@
 package wm.central;
 
+import wm.common.kafka.Topics;
 import wm.common.protocol.EstadoWS;
 
 import java.time.LocalTime;
@@ -16,7 +17,6 @@ import java.util.concurrent.ConcurrentHashMap;
  *  - Los métodos que cambian estados son synchronized: cada uno comprueba y modifica sin
  *    que otro hilo se cuele en medio.
  *
- * TODO cambio de estado pasa por cambiarEstado(): es el único punto donde habrá que avisar
  * al panel y publicar ESTADO_WS por Kafka.
  */
 public class RegistroEstaciones {
@@ -31,6 +31,8 @@ public class RegistroEstaciones {
 
     //Donde se guardan los cambios que deben sobrevivir a un reinicio (ubicación y bloqueo)
     private final BaseDatos bd;
+
+    private KafkaCentralManager kafkaManager;
 
     public RegistroEstaciones(BaseDatos bd) {
         this.bd = bd;
@@ -74,7 +76,15 @@ public class RegistroEstaciones {
         if (est == null || !est.isConectada()) {
             return;
         }
-        //TODO Kafka: si estaba REGANDO -> publicar PARAR#id#FUGA y avisar al FO por fugaRiego
+        if(kafkaManager != null){
+            String idFO = kafkaManager.getOperarioRegando(id);
+            if(idFO != null){
+                kafkaManager.publicarEvento(Topics.FUGA_RIEGO, idFO, "¡ALERTA FUGA en estación " + id + "!");
+            }
+            //Protocolo: PARAR#<idWS>#FUGA
+            kafkaManager.publicarEvento(Topics.ORDENES_RIEGO, id, "PARAR#" + id + "#FUGA");
+        }
+
         cambiarEstado(est, EstadoWS.FUGA);
     }
 
@@ -106,7 +116,10 @@ public class RegistroEstaciones {
         }
         est.setBloqueada(true);
         bd.guardarBloqueo(id, true);
-        //TODO Kafka: publicar BLOQUEAR#id (si estaba REGANDO, el Engine para con motivo BLOQUEO)
+        if(kafkaManager != null){
+            //Protocolo: BLOQUEAR#<idWS>
+            kafkaManager.publicarEvento(Topics.ORDENES_RIEGO, id, "BLOQUEAR#" + id);
+        }
         if (est.isConectada() && est.getEstado() != EstadoWS.FUGA) {
             cambiarEstado(est, EstadoWS.FUERA_SERVICIO);
         } else {
@@ -124,7 +137,9 @@ public class RegistroEstaciones {
         }
         est.setBloqueada(false);
         bd.guardarBloqueo(id, false);
-        //TODO Kafka: publicar ACTIVAR#id
+        if(kafkaManager != null){
+            kafkaManager.publicarEvento(Topics.ORDENES_RIEGO, id, "ACTIVAR#" + id);
+        }
         if (est.getEstado() == EstadoWS.FUERA_SERVICIO) {
             cambiarEstado(est, EstadoWS.DISPONIBLE);
         } else {
@@ -147,17 +162,29 @@ public class RegistroEstaciones {
         if (est == null) {
             return;
         }
-        //TODO Kafka: si estaba REGANDO -> cerrar el riego y enviar RESUMEN al FO con motivo CENTRAL
+        //Si estaba regando avisamos al operario de la desconexion
+        if(est.getEstado() == EstadoWS.REGANDO && kafkaManager != null){
+            String idFO = kafkaManager.getOperarioRegando(id);
+            if(idFO !=null){
+                kafkaManager.publicarEvento(Topics.RESUMEN_RIEGO, idFO, "Resumen: Estación " + id + 
+                    " | Motivo: CENTRAL | Riego abortado por desconexión de red."
+                );
+                kafkaManager.liberarOperario(id);
+            }
+        }
         est.setConectada(false);
         cambiarEstado(est, EstadoWS.DESCONECTADA);
     }
-
     /**
      * Todas las estaciones (para el panel). Es una vista del mapa: refleja los cambios
      * y se puede recorrer aunque otros hilos estén modificando estados.
      */
     public Collection<Estacion> getEstaciones() {
         return estaciones.values();
+    }
+
+    public void cambiarEstadoPublico(Estacion est, EstadoWS nuevo){
+        cambiarEstado(est, nuevo);
     }
 
     /**
@@ -170,10 +197,16 @@ public class RegistroEstaciones {
         }
         est.setEstado(nuevo);
         log(est.getId(), anterior + " -> " + nuevo);
-        //TODO Kafka: publicar ESTADO_WS#id#ubicacion#estado en estadoGlobalWS
+        if(kafkaManager != null){
+            String mensaje = String.format("ESTADO_WS#%s#%s#%s", est.getId(), est.getUbicacion(), nuevo.name());
+            kafkaManager.publicarEvento(Topics.ESTADO_GLOBAL_WS, est.getId(), mensaje);
+        }
     }
 
     private void log(String id, String texto) {
         System.out.println("[" + LocalTime.now().withNano(0) + "] [" + id + "] " + texto);
+    }
+    public void setKafkaManager(KafkaCentralManager kafkaManager){
+        this.kafkaManager = kafkaManager;
     }
 }
