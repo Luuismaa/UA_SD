@@ -276,7 +276,8 @@ public class Engine {
 
     public void iniciarRiegoManual(int duracionSegundos){
         log("Procesando SOLICITUD#MANUAL localmente...");
-        iniciarRiego(duracionSegundos, "MANUAL");
+        String mensaje = String.format("SOLICITUD#MANUAL#%s#%d", idWS, duracionSegundos);
+        kafkaManager.enviarMensaje(Topics.SOLICITAR_RIEGO, mensaje);
     }
 
     public void detenerRiegoManual(){
