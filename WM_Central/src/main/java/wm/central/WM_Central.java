@@ -4,73 +4,32 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.io.IOException;
 import java.sql.SQLException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.Locale;
 
-import wm.common.interfaces.IKafkaAdmin;
-import wm.common.kafka.KafkaAdmin;
-import wm.common.kafka.Topics;
-import wm.common.network.SocketServer;
 import wm.common.protocol.EstadoWS;
 
+/**
+ * Punto de entrada de la Central y su ventana de escritorio (Swing).
+ *
+ * La lógica vive en CentralCore. Si hay pantalla se abre esta ventana; si no la hay
+ * (Railway, Docker) la Central funciona igual en modo consola: todo sale por los logs.
+ */
 public class WM_Central extends JFrame {
-		//Puerto de escucha de la central
-		private static int puertoEscucha;
 
-		//IP y Puerto del broker (Kafka)
-		private static String broker;
-
-		//Ruta del archivo de DB
-		private static String rutaDB;
-
-		private BaseDatos bd;
-		private RegistroEstaciones registro;
-		private KafkaCentralManager kafkaManager;
+		private final CentralCore central;
 
 		//Componentes UI
 		private JTable tablaEstaciones;
 		private DefaultTableModel modeloTabla;
 		private JTextArea consola;
-		private boolean parpadeoEstado = true; // Para el VERDE PARPADEANDO	
+		private boolean parpadeoEstado = true; // Para el VERDE PARPADEANDO
 
-		
+		public WM_Central(CentralCore central){
+			this.central = central;
+			configurarUI();
+		}
 
-		//Segundos entre intentos de conexión con Kafka (cada intento ya tarda hasta 15 s por el timeout del AdminClient)
-		private static final int REINTENTO_KAFKA_S = 5;
-
-		//Planificador de tareas: ningún hilo se queda parado esperando. En vez de dormir esperando,
-		//le pedimos que ejecute una tarea más tarde y el hilo actual queda libre
-		private final ScheduledExecutorService planificador = Executors.newScheduledThreadPool(2);
-
-		//Nº de intento de conexión con Kafka (solo para mostrarlo en el log)
-		private static int intentosKafka = 0;
-
-        //Recibirá: 1. Puerto de escucha 2. IP del Broker:Puerto del Broker (Kafka) y SQLite ruta
-        private static void checkArgs(String[] args) {
-
-            if(args.length != 3) {
-				System.err.println("ERR: <Puerto Escucha> <Puerto:IP de Kafka> <Ruta DB>");
-				System.exit (1);
-            }
-
-			if(!args[1].contains(":")) {
-				System.err.println("ERR: <Puerto Escucha> <Puerto:IP de Kafka> <Ruta DB>");
-				System.exit (1);
-			}
-			try	{
-				//Recolectamos la información
-				puertoEscucha = Integer.parseInt(args[0]);
-				broker = args[1];
-				rutaDB = args[2];
-
-			} catch (Exception ex) {
-				System.err.println("ERROR con el parseo del puerto, procura que sea un número" + ex);
-				System.exit(1);
-			}
-        }
 		private void configurarUI(){
 			setTitle("Centro de Control y Monitorización (WM_Central)");
 			setSize(950, 600);
@@ -111,7 +70,7 @@ public class WM_Central extends JFrame {
 			consola.setEditable(false);
 			JScrollPane scrollConsola = new JScrollPane(consola);
 			scrollConsola.setBorder(BorderFactory.createTitledBorder("Mensajes de la Aplicación"));
-			add(scrollConsola, BorderLayout.SOUTH);	
+			add(scrollConsola, BorderLayout.SOUTH);
 
 			//Timer para actualizar la tabla y alternar el parpadeo visual cada 500ms
 			Timer timerUI = new Timer(500, e -> {
@@ -125,79 +84,22 @@ public class WM_Central extends JFrame {
 			SwingUtilities.invokeLater(() -> {
 				consola.append(mensaje + "\n");
 				consola.setCaretPosition(consola.getDocument().getLength());
-				System.out.println(mensaje);
 			});
-		}
-		private void iniciarLogica(){
-			// BASE DE DATOS + ESTACIONES: se cargan las WS registradas en SQLite
-			bd = new BaseDatos(rutaDB);
-			registro = new RegistroEstaciones(bd);
-			try {
-				bd.inicializar();
-				for (BaseDatos.DatosEstacion datos : bd.cargarEstaciones()) {
-					registro.registrar(datos.id(), datos.ubicacion(), datos.fueraServicio());
-				}
-				log("[BD] Carga de base de datos e información completada.");
-			} catch (SQLException e) {
-				log("[BD] No se puede abrir la base de datos '" + rutaDB + "': " + e.getMessage());
-				System.exit(1);
-			}
-			//KAFKA y SOCKETS en segundo plano para no bloquear el hilo de la UI Swing
-			planificador.execute(this::inicializarKafka);
-			planificador.execute(this::iniciarSockets);
-		}
-
-		/**
-		 * Un intento de conectar con Kafka y crear los topics. Si falla, no espera: programa el
-		 * siguiente intento en el planificador y termina. Se ejecuta en el hilo del planificador,
-		 * así que la Central sigue atendiendo sockets aunque Kafka no esté disponible.
-		 */
-		private void inicializarKafka() {
-			intentosKafka++;
-			try {
-				IKafkaAdmin kafkaAdmin = new KafkaAdmin();
-				kafkaAdmin.crearTopicsSiNoExisten(broker, Topics.TODOS);
-				log("[KAFKA] Conectado con Kafka en " + broker);
-				kafkaManager = new KafkaCentralManager(broker, registro, bd);
-				registro.setKafkaManager(kafkaManager);
-				kafkaManager.iniciarEscucha();
-
-				// Publicación periódica del estado de la central a operarios (cada 5s)
-				planificador.scheduleAtFixedRate(() -> {
-					for (Estacion est : registro.getEstaciones()) {
-						kafkaManager.publicarEstado(est);
-					}
-				}, 0, 5, TimeUnit.SECONDS);
-			} catch (Exception e) {
-				System.out.println("[KAFKA] No se ha podido conectar con Kafka (intento " + intentosKafka + "). Reintentando en " + REINTENTO_KAFKA_S + " s...");
-				planificador.schedule(this::inicializarKafka, REINTENTO_KAFKA_S, TimeUnit.SECONDS);
-			}
-		}
-
-		private void iniciarSockets(){
-			SocketServer servidor = new SocketServer((new ManejadorMonitor(registro)));
-			try{
-				log("[SOCKETS] Servidor a la escucha en el puerto " + puertoEscucha);
-				servidor.startServer(puertoEscucha);
-			}catch(IOException e){
-				log("[SOCKETS] No se puede escuchar en el puerto " + puertoEscucha + ": " + e.getMessage());
-			}
 		}
 
 		private void actualizarTabla(){
-			if (registro == null) return;
 			int filaSel = tablaEstaciones.getSelectedRow();
         	String idSel = filaSel != -1 ? (String) modeloTabla.getValueAt(filaSel, 0) : null;
 			modeloTabla.setRowCount(0);
 			int nuevaSel = -1;
-			for(Estacion est: registro.getEstaciones()){
+			for(Estacion est: central.getRegistro().getEstaciones()){
 				String operario = est.getOperario() != null ? est.getOperario() : "-";
 				modeloTabla.addRow(new Object[]{
 					est.getId(),
 					est.getUbicacion(),
 					est.getEstado(),
-					String.format(java.util.Locale.ROOT, "%.1f", est.getCaudal()),
-					String.format(java.util.Locale.ROOT, "%.1f", est.getVolumen()),
+					String.format(Locale.ROOT, "%.1f", est.getCaudal()),
+					String.format(Locale.ROOT, "%.1f", est.getVolumen()),
 					operario
 				});
 				if(est.getId().equals(idSel)){
@@ -225,7 +127,7 @@ public class WM_Central extends JFrame {
 			String id = obtenerIdSeleccionado();
         	if (id == null) return;
 
-			if(kafkaManager ==null){
+			if(!central.isKafkaConectado()){
 				JOptionPane.showMessageDialog(this, "Kafka aún no se ha conectado.", "Error", JOptionPane.ERROR_MESSAGE);
             	return;
 			}
@@ -233,11 +135,13 @@ public class WM_Central extends JFrame {
 			if(input != null && !input.trim().isEmpty()){
 				try {
 					int duracion = Integer.parseInt(input.trim());
-					log("[CENTRAL] Solicitando riego manual en " + id + " por " + duracion + "s.");
-					//Protocolo: SOLICITUD#CENTRAL#<idWS>#<duracion>. Pasa por la misma validación que un FO
-					kafkaManager.publicarEvento(Topics.SOLICITAR_RIEGO, id, "SOLICITUD#CENTRAL#" + id + "#" + duracion);
+					if(duracion <= 0){
+						throw new NumberFormatException();
+					}
+					log("[CENTRAL] Solicitando riego en " + id + " por " + duracion + "s.");
+					central.solicitarRiego(id, duracion);
 				} catch (NumberFormatException ex) {
-					JOptionPane.showMessageDialog(this, "La duración debe ser un número entero.", "Error", JOptionPane.ERROR_MESSAGE);
+					JOptionPane.showMessageDialog(this, "La duración debe ser un número entero positivo.", "Error", JOptionPane.ERROR_MESSAGE);
 				}
 			}
 		}
@@ -247,11 +151,11 @@ public class WM_Central extends JFrame {
 			if (id == null) return;
 			if(bloquear){
 				log("[CENTRAL] Aplicando bloqueo a " + id);
-            	registro.bloquear(id);
+            	central.bloquear(id);
 			}
 			else{
 				log("[CENTRAL] Aplicando activación a " + id);
-            	registro.activar(id);	
+            	central.activar(id);
 			}
 			actualizarTabla();
 		}
@@ -278,14 +182,38 @@ public class WM_Central extends JFrame {
 			}
 		}
 
-		public WM_Central(String[] args){
-			checkArgs(args);
-			configurarUI();
-			iniciarLogica();
-		}
+        /**
+         * Recibirá: 1. Puerto de escucha 2. IP:Puerto del Broker (Kafka) 3. Ruta de la BD SQLite
+         */
+        private static CentralCore crearDesdeArgs(String[] args) {
+			String uso = "ERR: <Puerto Escucha> <IP:Puerto de Kafka> <Ruta DB>";
+            if(args.length != 3 || !args[1].contains(":")) {
+				System.err.println(uso);
+				System.exit(1);
+            }
+			try	{
+				return new CentralCore(Integer.parseInt(args[0]), args[1], args[2]);
+			} catch (NumberFormatException ex) {
+				System.err.println("ERR: el puerto de escucha debe ser un número. " + uso);
+				System.exit(1);
+				return null; //Nunca se llega aquí: System.exit termina el programa
+			}
+        }
 
 		//MAIN
 	    public static void main(String[] args) {
-			SwingUtilities.invokeLater(() -> new WM_Central(args).setVisible(true));
+			CentralCore central = crearDesdeArgs(args);
+			try {
+				central.arrancar();
+			} catch (SQLException e) {
+				System.err.println("[BD] No se puede abrir la base de datos '" + central.getRutaDB() + "': " + e.getMessage());
+				System.exit(1);
+			}
+			//En Railway/Docker no hay pantalla: la Central sigue funcionando y todo sale por los logs
+			if (GraphicsEnvironment.isHeadless()) {
+				System.out.println("[CENTRAL] Sin pantalla: modo consola (sin ventana)");
+			} else {
+				SwingUtilities.invokeLater(() -> new WM_Central(central).setVisible(true));
+			}
 		}
 }

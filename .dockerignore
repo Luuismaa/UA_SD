@@ -1,0 +1,9 @@
+# Lo que NO se copia a las imágenes Docker (se construyen desde la raíz del repo)
+**/target/
+.git/
+.github/
+.vscode/
+**/.DS_Store
+*.db
+docs/
+prompts/
