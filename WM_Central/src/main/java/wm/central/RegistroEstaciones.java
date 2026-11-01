@@ -210,9 +210,10 @@ public class RegistroEstaciones {
 
     /**
      * El riego ha terminado: se borra el caudal y el operario, y si seguía REGANDO vuelve a
-     * su estado operativo. Si entretanto pasó a FUGA, FUERA_SERVICIO o DESCONECTADA, se respeta.
+     * su estado operativo (o a FUGA si terminó por una fuga: el aviso del Monitor puede llegar un
+     * instante después). Si entretanto pasó a FUGA, FUERA_SERVICIO o DESCONECTADA, se respeta.
      */
-    public synchronized void finalizarRiego(String id) {
+    public synchronized void finalizarRiego(String id, boolean porFuga) {
         Estacion est = estaciones.get(id);
         if (est == null) {
             return;
@@ -220,7 +221,10 @@ public class RegistroEstaciones {
         est.setCaudal(0.0);
         est.setOperario(null);
         if (est.getEstado() == EstadoWS.REGANDO) {
-            cambiarEstado(est, est.isConectada() ? estadoOperativo(est) : EstadoWS.DESCONECTADA);
+            EstadoWS siguiente = !est.isConectada() ? EstadoWS.DESCONECTADA
+                               : porFuga ? EstadoWS.FUGA
+                               : estadoOperativo(est);
+            cambiarEstado(est, siguiente);
         }
     }
 

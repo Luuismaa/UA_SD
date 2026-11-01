@@ -60,6 +60,8 @@ public class KafkaCentralManager {
     private final Map<String, Long> riegosBD = new ConcurrentHashMap<>();
     //Hora de inicio de cada riego (para calcular la duración si la Central lo cierra ella misma)
     private final Map<String, LocalDateTime> iniciosRiego = new ConcurrentHashMap<>();
+    //Riegos cuyo operario ya ha recibido el aviso de fuga (para no avisarle dos veces)
+    private final Set<String> fugasAvisadas = ConcurrentHashMap.newKeySet();
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -308,19 +310,32 @@ public class KafkaCentralManager {
         regandoOperarios.remove(idWS);
         pendientesInicio.remove(idWS);
         iniciosRiego.remove(idWS);
+        boolean fugaYaAvisada = fugasAvisadas.remove(idWS);
 
         Long idRiego = riegosBD.remove(idWS);
+        if(solicitante == null && idRiego == null){
+            //Ese riego ya estaba cerrado (p. ej. la Central lo cerró al perder el Monitor y después
+            //llega el FIN del Engine): no hay nada más que hacer
+            log("FIN de " + idWS + " (motivo " + motivo + ") de un riego ya cerrado: se ignora");
+            return;
+        }
         if(idRiego != null){
             bd.finalizarRiego(idRiego, LocalDateTime.now().withNano(0).toString(), duracion, volumen, motivo);
         }
 
         String volumenTxt = String.format(Locale.ROOT, "%.1f", volumen);
         log("Fin de riego en " + idWS + " (" + solicitante + "): " + volumenTxt + " L en " + duracion + " s, motivo " + motivo);
+        boolean porFuga = motivo.equals("FUGA");
         if(esOperario(solicitante)){
+            //El Engine puede cortar el riego por la avería antes de que llegue el aviso del Monitor:
+            //el operario recibe igualmente el aviso de fuga antes de su resumen
+            if(porFuga && !fugaYaAvisada){
+                publicarEvento(Topics.FUGA_RIEGO, solicitante, "FUGA#" + solicitante + "#" + idWS + "#" + volumenTxt);
+            }
             publicarEvento(Topics.RESUMEN_RIEGO, solicitante,
                 "RESUMEN#" + solicitante + "#" + idWS + "#" + volumenTxt + "#" + duracion + "#" + motivo);
         }
-        registro.finalizarRiego(idWS);
+        registro.finalizarRiego(idWS, porFuga);
     }
 
     /**
@@ -344,6 +359,7 @@ public class KafkaCentralManager {
             double volumen = est != null ? est.getVolumen() : 0.0;
             publicarEvento(Topics.FUGA_RIEGO, solicitante,
                 "FUGA#" + solicitante + "#" + idWS + "#" + String.format(Locale.ROOT, "%.1f", volumen));
+            fugasAvisadas.add(idWS);
         }
     }
 

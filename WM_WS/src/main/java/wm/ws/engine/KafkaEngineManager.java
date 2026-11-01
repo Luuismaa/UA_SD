@@ -46,7 +46,11 @@ public class KafkaEngineManager {
     private void initConsumer(){
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, direccionKafka);
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "engine-group-" + idWS);
+        //Grupo nuevo en cada arranque: si el Engine se cae de golpe, el grupo anterior se queda con la
+        //partición hasta que Kafka lo da por muerto (45 s por defecto) y el Engine reiniciado no
+        //recibiría órdenes. Con un grupo nuevo + latest, empieza limpio y sin órdenes viejas
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "ws-" + idWS + "-" + System.currentTimeMillis());
+        props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 6000);
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         //empezar a leer desde los ultimos mensajes recibidos

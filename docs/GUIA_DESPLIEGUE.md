@@ -92,22 +92,29 @@ Si la Central o Kafka estuvieran en otra IP, se indican así: `CENTRAL_IP=x.x.x.
 
 ## 3. PC LAB 1 — Operarios (WM_FO) con Docker
 
-El FO tiene ventana (Swing), así que el contenedor necesita la pantalla del PC (X11).
+El FO tiene ventana (Swing), así que el contenedor necesita la pantalla del PC (X11). Solo hace falta el archivo
+`compose-fo.yml` del repo; ya apunta al Kafka de AWS. El operario se elige con `FO_ID` (hay **FO-01 a FO-10**).
 
-**Linux** (una vez por sesión):
+**Linux** (una vez por sesión, para que los contenedores puedan abrir ventanas):
 ```bash
 xhost +local:docker
 ```
 **Operario FO-01:**
 ```bash
-docker run -it --rm -e DISPLAY=$DISPLAY -v /tmp/.X11-unix:/tmp/.X11-unix \
-  luuiss/wm-fo:latest 18.211.92.44:9092 FO-01
+FO_ID=FO-01 docker compose -f compose-fo.yml -p fo1 up
 ```
-**Operario FO-02** (otra terminal): igual, cambiando `FO-01` por `FO-02`. Hay **FO-01 a FO-10** dados de alta.
+**Operario FO-02** (otra terminal):
+```bash
+FO_ID=FO-02 docker compose -f compose-fo.yml -p fo2 up
+```
+Cerrar la ventana del FO lo para. Equivalente sin compose:
+`docker run --rm --net=host -e DISPLAY=$DISPLAY -e FO_ID=FO-01 -v /tmp/.X11-unix:/tmp/.X11-unix luuiss/wm-fo:latest`
 
 - macOS: instalar XQuartz (Preferencias → Seguridad → "Allow connections from network clients"), reiniciar sesión,
-  `xhost + 127.0.0.1` y usar `-e DISPLAY=host.docker.internal:0` (sin el `-v`).
-- Windows: VcXsrv con "Disable access control" y `-e DISPLAY=host.docker.internal:0.0` (sin el `-v`).
+  `xhost + 127.0.0.1` y `docker run --rm -e DISPLAY=host.docker.internal:0 -e FO_ID=FO-01 luuiss/wm-fo:latest`.
+- Windows: VcXsrv con "Disable access control" y
+  `docker run --rm -e DISPLAY=host.docker.internal:0.0 -e FO_ID=FO-01 luuiss/wm-fo:latest`.
+- Si Kafka estuviera en otra IP: añadir `KAFKA_IP=x.x.x.x:9092` (variable de entorno o `-e`).
 
 En la ventana del FO: a los ~5 s aparecen las estaciones en la tabla; elegir una, la duración y **Solicitar Riego**.
 **Ejecutar Fichero…** lanza las peticiones de un archivo (una línea por riego: `WS-01#30`), esperando 4 s tras acabar cada una.

@@ -42,6 +42,10 @@ public class KafkaFOManager{
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        //Grupo fijo: al reiniciarse, el FO recibe los mensajes que se perdió (p. ej. su RESUMEN).
+        //Si el FO se cerró de golpe, Kafka tarda session.timeout.ms en liberar el grupo: 6 s (mínimo)
+        //en vez de los 45 s por defecto
+        props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 6000);
 
         this.consumer = new KafkaConsumer<>(props);
 
