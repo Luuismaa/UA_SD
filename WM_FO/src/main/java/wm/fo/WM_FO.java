@@ -206,7 +206,7 @@ public class WM_FO extends JFrame{
             String linea;
             while((linea = reader.readLine()) != null){
                 linea = linea.trim();
-                if(linea.isEmpty() && !linea.startsWith("#")){
+                if(!linea.isEmpty() && !linea.startsWith("#")){
                     lineasValidas.add(linea);
                 }
             }
