@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WM_Central - Panel</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f2f4f7; color: #1d2433; }
+  header { background: #1d3557; color: #fff; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  header h1 { margin: 0; font-size: 20px; }
+  #conexion { font-size: 14px; }
+  main { max-width: 1150px; margin: 0 auto; padding: 16px; }
+  section { background: #fff; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  h2 { margin: 0 0 10px; font-size: 16px; }
+
+  /* Aviso si el navegador no consigue hablar con la Central */
+  #aviso { display: none; background: #c0392b; color: #fff; padding: 10px 16px; border-radius: 8px; margin-bottom: 14px; font-weight: bold; }
+
+  /* Resumen por estados */
+  #resumen { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { padding: 6px 12px; border-radius: 16px; font-size: 14px; font-weight: 600; }
+
+  /* Acciones a todas */
+  .barra { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type=number] { width: 80px; padding: 6px; border: 1px solid #b8c0cc; border-radius: 6px; font-size: 14px; }
+  button { padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; color: #fff; }
+  button:hover { filter: brightness(1.1); }
+  .b-regar { background: #2e7d32; }
+  .b-bloquear { background: #e67e22; }
+  .b-activar { background: #1d6fb8; }
+  #mensaje { font-size: 14px; margin-left: 8px; }
+
+  /* Tabla de estaciones */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; background: #e6e9ef; padding: 8px; }
+  td { padding: 8px; border-top: 1px solid rgba(0,0,0,.08); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.acciones { white-space: nowrap; }
+  td.acciones button { margin-right: 4px; }
+
+  /* Colores de la guía: fondo de la fila según el estado */
+  .DISPONIBLE     { background: #a9e5b0; }
+  .REGANDO        { background: #34c759; animation: parpadeo 1s infinite; }
+  .FUGA           { background: #ff6b5e; }
+  .FUERA_SERVICIO { background: #ffb347; }
+  .DESCONECTADA   { background: #c8ccd2; color: #4a4f57; }
+  @keyframes parpadeo { 50% { background: #e3f9e7; } }
+
+  #eventos { background: #111827; color: #d1fae5; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; height: 260px; overflow-y: auto; padding: 10px; border-radius: 6px; margin: 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>WM_Central · Panel de monitorización</h1>
+  <span id="conexion">Conectando…</span>
+</header>
+
+<main>
+  <div id="aviso">Imposible conectar con WM_Central. Reintentando…</div>
+
+  <section>
+    <h2>Resumen</h2>
+    <div id="resumen"></div>
+  </section>
+
+  <section>
+    <h2>Acciones sobre TODAS las estaciones <small style="font-weight:normal">(la duración también vale para el botón Regar de cada estación)</small></h2>
+    <div class="barra">
+      <label title="Se usa en todos los botones Regar, también en los de cada estación">Duración del riego (s): <input type="number" id="duracion" value="30" min="1"></label>
+      <button class="b-regar" onclick="accion('iniciar', 'TODAS')">Regar todas</button>
+      <button class="b-bloquear" onclick="accion('bloquear', 'TODAS')">Bloquear todas</button>
+      <button class="b-activar" onclick="accion('activar', 'TODAS')">Activar todas</button>
+      <span id="mensaje"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Estaciones de riego</h2>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Ubicación</th><th>Estado</th><th>Caudal (L/min)</th><th>Volumen (L)</th><th>Operario</th><th>Acciones</th></tr>
+      </thead>
+      <tbody id="tabla"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Registro de eventos de la Central</h2>
+    <pre id="eventos"></pre>
+  </section>
+</main>
+
+<script>
+  // Nombre que se ve en pantalla para cada estado (los colores están en el CSS)
+  const NOMBRES = {
+    DISPONIBLE: 'Disponible',
+    REGANDO: 'Regando',
+    FUGA: 'Fuga',
+    FUERA_SERVICIO: 'Fuera de Servicio',
+    DESCONECTADA: 'Desconectada'
+  };
+
+  // Los textos (p. ej. la ubicación) llegan desde las estaciones: se escapan para que
+  // nadie pueda colar HTML en el panel
+  function escapar(texto) {
+    return String(texto).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // Pide el estado a la Central y repinta el panel. Se repite cada segundo
+  async function refrescar() {
+    try {
+      const r = await fetch('/api/estado');
+      const datos = await r.json();
+      document.getElementById('aviso').style.display = 'none';
+      pintar(datos);
+    } catch (e) {
+      document.getElementById('aviso').style.display = 'block';
+      document.getElementById('conexion').textContent = 'Sin conexión';
+    }
+  }
+
+  function pintar(datos) {
+    document.getElementById('conexion').textContent =
+      'Kafka: ' + (datos.kafka ? 'conectado ✔' : 'NO disponible ✖') +
+      '  ·  actualizado ' + new Date().toLocaleTimeString();
+
+    // Resumen: cuántas estaciones hay en cada estado
+    const cuenta = {};
+    datos.estaciones.forEach(e => cuenta[e.estado] = (cuenta[e.estado] || 0) + 1);
+    document.getElementById('resumen').innerHTML = Object.keys(NOMBRES)
+      .map(est => `<span class="chip ${est}">${NOMBRES[est]}: ${cuenta[est] || 0}</span>`)
+      .join('');
+
+    // Tabla: una fila por estación, con el color de su estado
+    document.getElementById('tabla').innerHTML = datos.estaciones.map(e => `
+      <tr class="${e.estado}">
+        <td><b>${escapar(e.id)}</b></td>
+        <td>${escapar(e.ubicacion)}</td>
+        <td><b>${NOMBRES[e.estado]}</b>${e.bloqueada && e.estado !== 'FUERA_SERVICIO' ? ' (bloqueada)' : ''}</td>
+        <td class="num">${e.estado === 'REGANDO' ? e.caudal.toFixed(1) : '–'}</td>
+        <td class="num">${e.volumen.toFixed(1)}</td>
+        <td>${escapar(e.operario) || '–'}</td>
+        <td class="acciones">
+          <button class="b-regar" onclick="accion('iniciar', '${escapar(e.id)}')">Regar</button>
+          <button class="b-bloquear" onclick="accion('bloquear', '${escapar(e.id)}')">Bloquear</button>
+          <button class="b-activar" onclick="accion('activar', '${escapar(e.id)}')">Activar</button>
+        </td>
+      </tr>`).join('');
+
+    // Eventos: si el usuario estaba abajo del todo, seguimos mostrando lo último
+    const caja = document.getElementById('eventos');
+    const abajo = caja.scrollTop + caja.clientHeight >= caja.scrollHeight - 5;
+    caja.textContent = datos.eventos.join('\n');
+    if (abajo) caja.scrollTop = caja.scrollHeight;
+  }
+
+  // Envía una orden del punto 11 a una estación o a TODAS
+  async function accion(tipo, id) {
+    if (id === 'TODAS' && !confirm('¿Seguro que quieres ' + tipo + ' TODAS las estaciones?')) return;
+    const cuerpo = new URLSearchParams({ accion: tipo, id: id, duracion: document.getElementById('duracion').value });
+    const mensaje = document.getElementById('mensaje');
+    try {
+      const r = await fetch('/api/accion', { method: 'POST', body: cuerpo });
+      const res = await r.json();
+      mensaje.textContent = res.mensaje;
+      mensaje.style.color = res.ok ? '#2e7d32' : '#c0392b';
+    } catch (e) {
+      mensaje.textContent = 'Imposible conectar con WM_Central';
+      mensaje.style.color = '#c0392b';
+    }
+    refrescar();
+  }
+
+  refrescar();
+  setInterval(refrescar, 1000);
+</script>
+</body>
+</html>

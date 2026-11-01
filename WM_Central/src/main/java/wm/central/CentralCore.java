@@ -27,6 +27,8 @@ public class CentralCore {
     private final int puertoEscucha;
     private final String broker;
     private final String rutaDB;
+    //Puerto del panel web (http://IP:puertoWeb)
+    private final int puertoWeb;
 
     private final BaseDatos bd;
     private final RegistroEstaciones registro;
@@ -40,10 +42,11 @@ public class CentralCore {
     //Nº de intento de conexión con Kafka (solo para mostrarlo en el log)
     private int intentosKafka = 0;
 
-    public CentralCore(int puertoEscucha, String broker, String rutaDB) {
+    public CentralCore(int puertoEscucha, String broker, String rutaDB, int puertoWeb) {
         this.puertoEscucha = puertoEscucha;
         this.broker = broker;
         this.rutaDB = rutaDB;
+        this.puertoWeb = puertoWeb;
         this.bd = new BaseDatos(rutaDB);
         this.registro = new RegistroEstaciones(bd);
     }
@@ -64,6 +67,12 @@ public class CentralCore {
         planificador.execute(this::inicializarKafka);
         //Hilo propio: el bucle de accept no termina nunca y no debe ocupar un hilo del planificador
         new Thread(this::iniciarSockets, "servidor-sockets").start();
+        //Panel web: si falla (p. ej. puerto ocupado) la Central sigue funcionando sin él
+        try {
+            new PanelWeb(this, puertoWeb).arrancar();
+        } catch (IOException e) {
+            System.err.println("[PANEL WEB] No se ha podido arrancar en el puerto " + puertoWeb + ": " + e.getMessage());
+        }
     }
 
     /**

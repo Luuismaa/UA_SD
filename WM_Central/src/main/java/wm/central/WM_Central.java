@@ -24,6 +24,7 @@ public class WM_Central extends JFrame {
 		private DefaultTableModel modeloTabla;
 		private JTextArea consola;
 		private boolean parpadeoEstado = true; // Para el VERDE PARPADEANDO
+		private long eventosMostrados = -1;    // Para repintar la consola solo si hay eventos nuevos
 
 		public WM_Central(CentralCore central){
 			this.central = central;
@@ -72,19 +73,31 @@ public class WM_Central extends JFrame {
 			scrollConsola.setBorder(BorderFactory.createTitledBorder("Mensajes de la Aplicación"));
 			add(scrollConsola, BorderLayout.SOUTH);
 
-			//Timer para actualizar la tabla y alternar el parpadeo visual cada 500ms
+			//Timer para actualizar la tabla, la consola y alternar el parpadeo visual cada 500ms
 			Timer timerUI = new Timer(500, e -> {
 				parpadeoEstado = !parpadeoEstado;
 				actualizarTabla();
+				actualizarConsola();
         	});
         	timerUI.start();
 		}
 
+		/**
+		 * La consola muestra los mismos eventos de la Central que el panel web (RegistroEventos).
+		 */
+		private void actualizarConsola(){
+			long total = RegistroEventos.getTotal();
+			if(total == eventosMostrados){
+				return;
+			}
+			eventosMostrados = total;
+			consola.setText(String.join("\n", RegistroEventos.getLineas()));
+			consola.setCaretPosition(consola.getDocument().getLength());
+		}
+
 		private void log(String mensaje){
-			SwingUtilities.invokeLater(() -> {
-				consola.append(mensaje + "\n");
-				consola.setCaretPosition(consola.getDocument().getLength());
-			});
+			//Pasa por la consola, así queda en RegistroEventos y se ve en la ventana y en el panel web
+			System.out.println("[" + java.time.LocalTime.now().withNano(0) + "] " + mensaje);
 		}
 
 		private void actualizarTabla(){
@@ -182,19 +195,24 @@ public class WM_Central extends JFrame {
 			}
 		}
 
+		//Puerto del panel web si no se indica el 4º argumento
+		private static final int PUERTO_WEB_POR_DEFECTO = 8080;
+
         /**
          * Recibirá: 1. Puerto de escucha 2. IP:Puerto del Broker (Kafka) 3. Ruta de la BD SQLite
+         * 4. (opcional) Puerto del panel web, 8080 por defecto
          */
         private static CentralCore crearDesdeArgs(String[] args) {
-			String uso = "ERR: <Puerto Escucha> <IP:Puerto de Kafka> <Ruta DB>";
-            if(args.length != 3 || !args[1].contains(":")) {
+			String uso = "ERR: <Puerto Escucha> <IP:Puerto de Kafka> <Ruta DB> [Puerto panel web, por defecto 8080]";
+            if((args.length != 3 && args.length != 4) || !args[1].contains(":")) {
 				System.err.println(uso);
 				System.exit(1);
             }
 			try	{
-				return new CentralCore(Integer.parseInt(args[0]), args[1], args[2]);
+				int puertoWeb = args.length == 4 ? Integer.parseInt(args[3]) : PUERTO_WEB_POR_DEFECTO;
+				return new CentralCore(Integer.parseInt(args[0]), args[1], args[2], puertoWeb);
 			} catch (NumberFormatException ex) {
-				System.err.println("ERR: el puerto de escucha debe ser un número. " + uso);
+				System.err.println("ERR: los puertos deben ser números. " + uso);
 				System.exit(1);
 				return null; //Nunca se llega aquí: System.exit termina el programa
 			}
@@ -202,6 +220,8 @@ public class WM_Central extends JFrame {
 
 		//MAIN
 	    public static void main(String[] args) {
+			//Desde aquí, todo lo que se imprime queda también en el registro de eventos (panel web y ventana)
+			RegistroEventos.instalar();
 			CentralCore central = crearDesdeArgs(args);
 			try {
 				central.arrancar();
@@ -209,7 +229,7 @@ public class WM_Central extends JFrame {
 				System.err.println("[BD] No se puede abrir la base de datos '" + central.getRutaDB() + "': " + e.getMessage());
 				System.exit(1);
 			}
-			//En Railway/Docker no hay pantalla: la Central sigue funcionando y todo sale por los logs
+			//En AWS/Docker no hay pantalla: la Central sigue funcionando y se maneja desde el panel web
 			if (GraphicsEnvironment.isHeadless()) {
 				System.out.println("[CENTRAL] Sin pantalla: modo consola (sin ventana)");
 			} else {

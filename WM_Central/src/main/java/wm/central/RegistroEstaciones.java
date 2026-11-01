@@ -4,7 +4,9 @@ import wm.common.kafka.Topics;
 import wm.common.protocol.EstadoWS;
 
 import java.time.LocalTime;
-import java.util.Collection;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -218,11 +220,13 @@ public class RegistroEstaciones {
     }
 
     /**
-     * Todas las estaciones (para el panel). Es una vista del mapa: refleja los cambios
-     * y se puede recorrer aunque otros hilos estén modificando estados.
+     * Todas las estaciones ordenadas por ID (para los paneles). Es una copia de la lista: se
+     * puede recorrer aunque otros hilos estén modificando estados.
      */
-    public Collection<Estacion> getEstaciones() {
-        return estaciones.values();
+    public List<Estacion> getEstaciones() {
+        List<Estacion> lista = new ArrayList<>(estaciones.values());
+        lista.sort(Comparator.comparing(Estacion::getId));
+        return lista;
     }
 
     public void setKafkaManager(KafkaCentralManager kafkaManager){

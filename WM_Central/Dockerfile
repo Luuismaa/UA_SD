@@ -21,9 +21,11 @@ RUN mkdir -p /data
 #   PUERTO_SOCKETS  puerto donde escucha a los Monitors (hay que abrirlo en el Security Group de AWS)
 #   KAFKA_BROKER    host:puerto de Kafka (obligatoria)
 #   RUTA_DB         archivo SQLite
+#   PUERTO_WEB      panel web de la Central (http://IP:PUERTO_WEB), también abierto en el Security Group
 ENV PUERTO_SOCKETS=5050 \
-    RUTA_DB=/data/central.db
-EXPOSE 5050
+    RUTA_DB=/data/central.db \
+    PUERTO_WEB=8080
+EXPOSE 5050 8080
 
-# Sin pantalla en el contenedor: la Central arranca en modo consola (los logs se ven con "docker logs")
-CMD exec java -Djava.awt.headless=true -jar app.jar "$PUERTO_SOCKETS" "$KAFKA_BROKER" "$RUTA_DB"
+# Sin pantalla en el contenedor: no hay ventana, la Central se maneja desde el panel web
+CMD exec java -Djava.awt.headless=true -jar app.jar "$PUERTO_SOCKETS" "$KAFKA_BROKER" "$RUTA_DB" "$PUERTO_WEB"
