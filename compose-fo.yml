@@ -1,0 +1,10 @@
+services:
+  field-operator:
+    image: luuiss/wm-fo:latest
+    network_mode: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - KAFKA_IP=${KAFKA_IP:-18.211.92.44:9092}
+      - FO_ID=${FO_ID:-FO-01}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw

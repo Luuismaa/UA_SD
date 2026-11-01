@@ -1,7 +1,7 @@
 services:
   monitor:
     image: luuiss/wm-ws:latest
-    # El orden ahora es: <puerto Engine> <IP:puerto Central> <ID> <ubicación>
+    #<puerto Engine> <IP:puerto Central> <ID> <ubicación>
     command: ["java", "-jar", "monitor.jar", "6000", "${CENTRAL_IP:-184.194.154.93}:5050", "${ID_WS:-WS-01}", "${UBICACION:-ZONA_A}"]
 
   engine:
