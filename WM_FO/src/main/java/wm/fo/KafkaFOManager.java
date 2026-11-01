@@ -38,7 +38,7 @@ public class KafkaFOManager{
     public void iniciarEscucha(BiConsumer<String, String> procesadorMensajes){
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, broker);
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "fo-group-" +idFO + "-" + System.currentTimeMillis());
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "fo-group-" +idFO);
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
@@ -77,7 +77,7 @@ public class KafkaFOManager{
     }
     public void solicitarRiego(String idWS, int duracionSegundos){
         //Formato del mensaje: idFO#idWS#duracion
-        String mensaje = String.format("%s#%s#%d", idFO, idWS, duracionSegundos);
+        String mensaje = String.format("SOLICITUD#%s#%s#%d", idFO, idWS, duracionSegundos);
         ProducerRecord<String, String> record = new ProducerRecord<>(Topics.SOLICITAR_RIEGO, idWS, mensaje);
         producer.send(record);
     }

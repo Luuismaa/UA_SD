@@ -43,11 +43,34 @@ public class WM_WS_E {
         Engine engine = new Engine(puertoKafka, ipMonitor, puertoMonitor);
         engine.start();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> engine.detener()));
-        System.out.println("  Pulse [ENTER] para alternar el estado (OK <-> KO)");
+        System.out.println("\n--- PANEL DE CONTROL ENGINE ---");
+        System.out.println(" 1: Alternar Avería (OK <-> KO)");
+        System.out.println(" 2: Iniciar Riego Manual");
+        System.out.println(" 3: Detener Riego Manual");
+        System.out.println("-------------------------------");
         try(Scanner scanner = new Scanner(System.in)){
             while(true){
-                scanner.nextLine();
-                engine.alternarAveria();
+                System.out.print("> ");
+                String input = scanner.nextLine().trim();
+                switch(input){
+                    case "1":
+                        engine.alternarAveria();
+                        break;
+                    case "2":
+                        System.out.print(" Duración (segundos): ");
+                        try {
+                            int duracion = Integer.parseInt(scanner.nextLine().trim());
+                            engine.iniciarRiegoManual(duracion);
+                        } catch (NumberFormatException e) {
+                            System.out.println(" ERR: Introduce un número válido");
+                        }
+                        break;
+                    case "3":
+                        engine.detenerRiegoManual();
+                        break;
+                    default:
+                        System.out.println(" Opción no reconocida.");
+                }
             }
         }
     }

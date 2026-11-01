@@ -1,21 +1,21 @@
 package wm.ws.engine;
-import wm.common.interfaces.INetworkClient;
-import wm.common.kafka.Topics;
-import wm.common.network.SocketClient;
-
 import java.io.IOException;
 import java.time.LocalTime;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import org.apache.kafka.common.internals.Topic;
+
+import wm.common.interfaces.INetworkClient;
+import wm.common.kafka.Topics;
+import wm.common.network.SocketClient;
 /**
  * Clase principal del Engine de la WS (WM_WS_E).
  * Se encarga de iniciar el monitor y de conectarse a Kafka.
  * Engine
  */
 public class Engine {
+    private boolean kafkaIniciado = false;
     /**
      * Puerto de Kafka al que se conectará esta WS
      */
@@ -109,7 +109,10 @@ public class Engine {
             }
             this.idWS = primerMensaje.split("#")[1];
             log("Identificador asignado por el monitor: "+ idWS);
-            iniciarEscuchaKafka();
+            if(!kafkaIniciado){
+                iniciarEscuchaKafka();
+                kafkaIniciado = true;
+            }
             //Bucle para responder a las peticiones de salud del monitor.
             //receiveMessage bloquea esperando un mensaje: es esperar un evento, no una pausa fija
             while(true){
@@ -167,12 +170,13 @@ public class Engine {
                     else{
                         idFO = "DESCONOCIDO";
                     }
-                    int duracion;
+                    int duracion = 60;
                     if(partes.length > 3){
-                        duracion = Integer.parseInt(partes[3]);
-                    }
-                    else{
-                        duracion = 60;
+                        try {
+                            duracion = Integer.parseInt(partes[3]);
+                        } catch (NumberFormatException e) {
+                            log("Error al parsear duración, se usará 60s por defecto.");
+                        }
                     }
                     iniciarRiego(duracion, idFO);
                 }
@@ -268,5 +272,15 @@ public class Engine {
         if(kafkaManager != null){
             kafkaManager.detener();
         }
+    }
+
+    public void iniciarRiegoManual(int duracionSegundos){
+        log("Procesando SOLICITUD#MANUAL localmente...");
+        iniciarRiego(duracionSegundos, "MANUAL");
+    }
+
+    public void detenerRiegoManual(){
+        log("Procesando parada manual...");
+        detenerRiego("MANUAL");
     }
 }

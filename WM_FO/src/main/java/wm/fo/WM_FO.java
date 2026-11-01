@@ -35,6 +35,12 @@ import javax.swing.table.DefaultTableModel;
 import wm.common.kafka.Topics;
 
 public class WM_FO extends JFrame{
+    private volatile long ultimoLatidoCentral = System.currentTimeMillis();
+    private final ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor();
+
+    private List<String> lineasFichero = null;
+    private int indiceFichero = 0;
+
     private final String broker;
     private final String idFO;
     private final KafkaFOManager kafkaManager;
@@ -140,6 +146,16 @@ public class WM_FO extends JFrame{
         JScrollPane scrollLog = new JScrollPane(txtLog);
         scrollLog.setBorder(BorderFactory.createTitledBorder("Registro de aplicación / Mensajes central"));
         add(scrollLog, BorderLayout.SOUTH);
+
+        //Iniciar el watchdog
+        watchdog.scheduleAtFixedRate(()->{
+            if(System.currentTimeMillis() - ultimoLatidoCentral > 10000){
+                SwingUtilities.invokeLater(()->{
+                    lblEstadoRiego.setText("Imposible conectar con WM_Central");
+                    lblEstadoRiego.setForeground(Color.RED);
+                });
+            }
+        }, 10, 2, TimeUnit.SECONDS);
     }
     private void iniciarKafka(){
         log("COnectando a Kafka...");
@@ -150,12 +166,29 @@ public class WM_FO extends JFrame{
     }
     private void procesarEvento(String topic, String mensaje){
         switch(topic){
-            case Topics.RIEGO_PASOS_AUTORIZACION -> log("[AUTORIZACIÓN] "+ mensaje);
+            case Topics.RIEGO_PASOS_AUTORIZACION -> {
+                log("[AUTORIZACIÓN] "+ mensaje);
+                //Formato esperado: PASO#F0-01#WS-03#DENEGADA#motivo
+                String[] partes = mensaje.split("#");
+                if (partes.length >= 4 && "DENEGADA".equals(partes[3])) {
+                    lblEstadoRiego.setText("Estado: Petición Denegada");
+                    lblEstadoRiego.setForeground(Color.RED);
+                    
+                    // Si estamos en modo fichero, continuar al siguiente a los 4 segundos
+                    if (lineasFichero != null && indiceFichero < lineasFichero.size()) {
+                        executorFichero.schedule(this::programarSiguienteOrden, 4, TimeUnit.SECONDS);
+                    }
+                }
+            }
             case Topics.ESTADO_RIEGO_FO -> actualizarTelemetria(mensaje);
             case Topics.RESUMEN_RIEGO -> {
                 log("[FIN RIEGO] Resumen final: " + mensaje);
                 lblEstadoRiego.setText("Estado: Finalizado");
                 lblEstadoRiego.setForeground((Color.BLACK));
+                //Continuar 4s DESPUÉS de que concluya el riego
+                if(lineasFichero != null && indiceFichero < lineasFichero.size()){
+                     executorFichero.schedule(this::programarSiguienteOrden, 4, TimeUnit.SECONDS);
+                }
             }
             case Topics.FUGA_RIEGO -> {
                 log("[¡ALERTA FUGA!] "+ mensaje);
@@ -167,16 +200,17 @@ public class WM_FO extends JFrame{
         }
     }
     private void actualizarTelemetria(String mensaje){
-        // Formato: TELEMETRIA#idWS#caudal#volumen
+        //Formato: TELEMETRIA#idFO#idWS#caudal#volumen
         String[] partes = mensaje.split("#");
-        if(partes.length >= 4){
-            lblEstadoRiego.setText("Regando en estacion: " + partes[1]);
+        if(partes.length >= 5){
+            lblEstadoRiego.setText("Regando en estacion: " + partes[2]);
             lblEstadoRiego.setForeground(new Color(39,174,96));
-            lblCaudal.setText("Caudal: " + partes[2] + " L/min");
-            lblVolumen.setText("Volumen acumulado: " + partes[3] + " L");
+            lblCaudal.setText("Caudal: " + partes[3] + " L/min");
+            lblVolumen.setText("Volumen acumulado: " + partes[4] + " L");
         }
     }
     private void actualizarEstadoGlobalWS(String mensaje){
+        ultimoLatidoCentral = System.currentTimeMillis();
         // Formato: ESTADO_WS#idWS#ubicacion#estado
         String[] partes = mensaje.split("#");
         if(partes.length >=4){
@@ -219,27 +253,30 @@ public class WM_FO extends JFrame{
     }
     private void procesarFichero(File file){
         log("Leyendo fichero de automatización: " + file.getName());
-        List<String> lineasValidas = new ArrayList<>();
+        lineasFichero= new ArrayList<>();
         try(BufferedReader reader = new BufferedReader(new FileReader(file))){
             String linea;
             while((linea = reader.readLine()) != null){
                 linea = linea.trim();
                 if(!linea.isEmpty() && !linea.startsWith("#")){
-                    lineasValidas.add(linea);
+                    lineasFichero.add(linea);
                 }
             }
             //Iniciar procesamiento secuencial con pausa programada de 4 segundos
-            programarSiguienteOrden(lineasValidas, 0);
+            indiceFichero = 0;
+            programarSiguienteOrden();
         }catch(Exception e){
             log("ERR al procesar fichero: " + e.getMessage());
         }
     }
-    private void programarSiguienteOrden(List<String> lineas, int indice){
-        if(indice >= lineas.size()){
+    private void programarSiguienteOrden(){
+        if(indiceFichero >= lineasFichero.size()){
             SwingUtilities.invokeLater(() -> log("[FICHERO] Finalizada la ejecución del archivo"));
+            lineasFichero=null;
             return;
         }
-        String linea = lineas.get(indice);
+        String linea = lineasFichero.get(indiceFichero);
+        indiceFichero++;
         String[] partes = linea.split("#");
         // Formato esperado en fichero: WS-03#60
         if(partes.length >=2){
@@ -247,12 +284,10 @@ public class WM_FO extends JFrame{
             int duracion = Integer.parseInt(partes[1]);
             SwingUtilities.invokeLater(() -> log("[FICHERO] Solicitando riego en " + idWS + "por " + duracion +"s"));
             kafkaManager.solicitarRiego(idWS, duracion);
-            //Siguiente orden 4 segundos despues mediante el planificador
-            executorFichero.schedule(() -> programarSiguienteOrden(lineas, indice + 1), 4, TimeUnit.SECONDS);
         }
         else{
             //Si hay una linea con formato incorrecto salta de inmediato a la siguiente
-            programarSiguienteOrden(lineas, indice+1);
+            programarSiguienteOrden();
         }
     }
 

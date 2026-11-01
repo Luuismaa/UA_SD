@@ -1,20 +1,21 @@
 package wm.ws.monitor;
 
-import wm.common.interfaces.INetworkClient;
-import wm.common.network.ConexionesTramas;
-import wm.common.network.SocketClient;
-import wm.common.network.SocketServer;
-import wm.common.protocol.SocketProtocol;
-
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.time.LocalTime;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+
+import wm.common.interfaces.INetworkClient;
+import wm.common.network.ConexionesTramas;
+import wm.common.network.SocketClient;
+import wm.common.network.SocketServer;
+import wm.common.protocol.SocketProtocol;
 
 /**
  * Monitor de una estación de riego (WM_WS_M).
@@ -121,7 +122,7 @@ public class WM_WS_M {
      */
     private void atenderEngine(Socket socket){
       String origen = String.valueOf(socket.getRemoteSocketAddress());
-      ScheduledFuture<?> tareaSalud = null;
+      CompletableFuture<Void> finConexion = new CompletableFuture<>();
       ConexionesTramas conexion = null;
       try{
         log("Engine conectado desde " + socket.getRemoteSocketAddress());
@@ -136,7 +137,8 @@ public class WM_WS_M {
         //Enviar el ID asignado a la estación
         conexion.enviarMensaje("IDWS#" + this.idWS);
         log("Engine conectado desde " + origen + " asignado a " + this.idWS);
-        ejecutarCicloSalud(conexion, origen);
+        ejecutarCicloSalud(conexion, origen, finConexion);
+        finConexion.join();
       }catch(Exception e){
         log("Error inicial en la conexión con Engine en " + origen + ": " + e.getMessage());
         if(!enFuga){
@@ -147,13 +149,13 @@ public class WM_WS_M {
         }
       }
     }
-    private void ejecutarCicloSalud(ConexionesTramas conexion, String origen){
+    private void ejecutarCicloSalud(ConexionesTramas conexion, String origen, CompletableFuture<Void> finConexion){
       try{
         conexion.enviarMensaje("SALUD");
         String respuesta = conexion.recibirMensaje();
         if(respuesta==null){
           log("Engine " + idWS + " se ha despedido (EOT)");
-          cerrarConexionEngine(conexion);
+          cerrarConexionEngine(conexion, finConexion);
           return;
         }
         if("KO".equals(respuesta)){
@@ -171,29 +173,30 @@ public class WM_WS_M {
         else{
           log("Engine "+ idWS + "responde inesperado: '" + respuesta + "'");
         }
-        planificador.schedule(() -> ejecutarCicloSalud(conexion, origen), 1000, TimeUnit.MILLISECONDS);
+        planificador.schedule(() -> ejecutarCicloSalud(conexion, origen, finConexion), 1000, TimeUnit.MILLISECONDS);
       }catch(SocketTimeoutException e){
         log("Engine " + idWS + " no ha respondido a SALUD en 3 s, se asume avería/fuga");
-        manejarFalloEngine(conexion);
+        manejarFalloEngine(conexion, finConexion);
       }catch(EOFException e){
         log("Engine " + idWS + " cerró la conexión abruptamente");
-        manejarFalloEngine(conexion);
+        manejarFalloEngine(conexion, finConexion);
       }catch(IOException e){
         log("Error de comunicación con Engine " + idWS + ": " + e.getMessage());
-        manejarFalloEngine(conexion);
+        manejarFalloEngine(conexion, finConexion);
       }
     }
-    private void manejarFalloEngine(ConexionesTramas conexion){
+    private void manejarFalloEngine(ConexionesTramas conexion, CompletableFuture<Void> finConexion){
       if(!enFuga){
         notificarFuga();
       }
-      cerrarConexionEngine(conexion);
+      cerrarConexionEngine(conexion, finConexion);
     }
 
-    private void cerrarConexionEngine(ConexionesTramas conexion){
+    private void cerrarConexionEngine(ConexionesTramas conexion, CompletableFuture<Void> finConexion){
       if(conexion!= null){
         conexion.cerrar();
       }
+      finConexion.complete(null);
     }
     /**
      * UN intento de conectar y autenticarse en la Central.

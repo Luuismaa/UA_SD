@@ -4,10 +4,16 @@ import java.util.Collections;
 import java.util.Properties;
 import java.util.function.BiConsumer;
 
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+
 import wm.common.kafka.Topics;
 /**
  * Gestiona la conexión de la WS con Kafka
@@ -45,6 +51,7 @@ public class KafkaEngineManager {
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         //empezar a leer desde los ultimos mensajes recibidos
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
         this.consumer =new KafkaConsumer<>(props);
     }
     private void bucleConsumidor(BiConsumer<String, String> procesadorMensajes){
