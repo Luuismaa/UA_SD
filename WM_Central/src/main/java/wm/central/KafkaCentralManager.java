@@ -192,4 +192,9 @@ public class KafkaCentralManager {
             scheduler.shutdown();
         }
     }
+    public void liberarOperario(String idWS){
+        regandoOperarios.remove(idWS);
+        pendientesInicio.remove(idWS);
+    }
+
 }
