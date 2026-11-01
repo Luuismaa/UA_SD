@@ -4,10 +4,16 @@ import java.util.Arrays;
 import java.util.Properties;
 import java.util.function.BiConsumer;
 
-import org.apache.kafka.clients.consumer.*;
-import org.apache.kafka.clients.producer.*;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+
 import wm.common.kafka.Topics;
 public class KafkaFOManager{
     private final String broker;
@@ -72,7 +78,7 @@ public class KafkaFOManager{
     public void solicitarRiego(String idWS, int duracionSegundos){
         //Formato del mensaje: idFO#idWS#duracion
         String mensaje = String.format("%s#%s#%d", idFO, idWS, duracionSegundos);
-        ProducerRecord<String, String> record = new ProducerRecord<String,String>(Topics.SOLICITAR_RIEGO, idWS, mensaje);
+        ProducerRecord<String, String> record = new ProducerRecord<>(Topics.SOLICITAR_RIEGO, idWS, mensaje);
         producer.send(record);
     }
     public void detener(){
