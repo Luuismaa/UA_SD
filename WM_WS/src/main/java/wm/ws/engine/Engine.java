@@ -1,4 +1,9 @@
 package wm.ws.engine;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.time.LocalTime;
 import java.util.concurrent.Executors;
@@ -112,6 +117,7 @@ public class Engine {
             if(!kafkaIniciado){
                 iniciarEscuchaKafka();
                 kafkaIniciado = true;
+                comprobarYRecuperarRiegoPendiente();
             }
             //Bucle para responder a las peticiones de salud del monitor.
             //receiveMessage bloquea esperando un mensaje: es esperar un evento, no una pausa fija
@@ -130,7 +136,7 @@ public class Engine {
                 clienteMonitor.sendMessage(respuesta);
             }
         }catch(IOException e){
-            log("Pérdida de conexión con el monitor: " + e.getMessage() + ". Reintentando en 3s...");
+            log("ESTACIÓN AVERIADA: sin conexión con el Monitor (" + e.getMessage() + "). Reintentando en 3s...");
         }finally{
             if(regando){
                 monitorConectado = false;
@@ -223,6 +229,7 @@ public class Engine {
 
         log("Abirendo electroválvula. Riego iniciado por "+ duracionSegundos + " segs (Operario: " + idFO + ")");
         kafkaManager.enviarMensaje(Topics.INICIO_RIEGO, mensajeInicio);
+        guardarEstadoRiegoLocal();
         tareaTelemetria = scheduler.scheduleAtFixedRate(this::emitirTelemetria, 1, 1, TimeUnit.SECONDS);
     }
 
@@ -233,6 +240,7 @@ public class Engine {
         }
         volumenAcumuladoLitros = volumenAcumuladoLitros + (caudalLitrosMin/60.0);
         tiempoRestanteSegundos--;
+        guardarEstadoRiegoLocal();
         // Formato: TELEMETRIA#WS-03#12.4#186.0 (Locale.US para el punto decimal)
         String telemetria = String.format(java.util.Locale.US, "TELEMETRIA#%s#%.1f#%.1f",
             idWS, caudalLitrosMin, volumenAcumuladoLitros);
@@ -259,6 +267,54 @@ public class Engine {
         
         log("Cerrando electroválvula. Riego detenido. Motivo: "+ motivo + "-> Mensaje enviado: " + mensajeFin);
         kafkaManager.enviarMensaje(Topics.FIN_RIEGO, mensajeFin);
+        borrarEstadoRiegoLocal();
+    }
+
+    private void guardarEstadoRiegoLocal(){
+        String nombreArchivo = "riego_pendiente_" + (idWS != null ? idWS : "WS") + ".txt";
+        File archivo = new File(nombreArchivo);
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(archivo))) {
+            int duracionReal = duracionTotalSegundos - Math.max(0, tiempoRestanteSegundos);
+            String contenido = String.format(java.util.Locale.US, "%s#%.1f#%d#%s", 
+                idWS != null ? idWS : "WS", volumenAcumuladoLitros, duracionReal, operarioActual);
+            writer.write(contenido);
+        } catch (IOException e) {
+            log("Error guardando estado local de riego: " + e.getMessage());
+        }
+    }
+
+    private void borrarEstadoRiegoLocal(){
+        String nombreArchivo = "riego_pendiente_" + (idWS != null ? idWS : "WS") + ".txt";
+        File archivo = new File(nombreArchivo);
+        if (archivo.exists()) {
+            archivo.delete();
+        }
+    }
+
+    private void comprobarYRecuperarRiegoPendiente(){
+        String nombreArchivo = "riego_pendiente_" + (idWS != null ? idWS : "WS") + ".txt";
+        File archivo = new File(nombreArchivo);
+        if(archivo.exists()){
+            try (BufferedReader reader = new BufferedReader(new FileReader(archivo))) {
+                String linea = reader.readLine();
+                if (linea != null && !linea.isBlank()) {
+                    String[] partes = linea.split("#");
+                    if (partes.length >= 3) {
+                        String id = partes[0];
+                        double volumen = Double.parseDouble(partes[1]);
+                        int duracion = Integer.parseInt(partes[2]);
+                        
+                        String mensajeFin = String.format(java.util.Locale.US, "FIN#%s#FUGA#%.1f#%d", id, volumen, duracion);
+                        log("[RECUPERACIÓN] Riego previo a medias detectado por caída del Engine. Enviando estado final por FUGA: " + mensajeFin);
+                        kafkaManager.enviarMensaje(Topics.FIN_RIEGO, mensajeFin);
+                    }
+                }
+            } catch (Exception e) {
+                log("Error al recuperar estado de riego pendiente: " + e.getMessage());
+            } finally {
+                archivo.delete();
+            }
+        }
     }
 
     private void log(String mensaje){
