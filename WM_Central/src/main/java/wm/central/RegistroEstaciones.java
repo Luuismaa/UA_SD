@@ -11,13 +11,14 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Estado compartido de todas las estaciones que conoce la Central.
  *
- * Varios hilos lo usan a la vez (un ManejadorMonitor por cada Monitor conectado y, más
- * adelante, el consumidor de Kafka y el menú). Por eso:
+ * Varios hilos lo usan a la vez (un ManejadorMonitor por cada Monitor conectado, el consumidor
+ * de Kafka y la interfaz). Por eso:
  *  - El mapa es un ConcurrentHashMap: se puede recorrer mientras otros hilos lo modifican.
  *  - Los métodos que cambian estados son synchronized: cada uno comprueba y modifica sin
  *    que otro hilo se cuele en medio.
  *
- * al panel y publicar ESTADO_WS por Kafka.
+ * Todo cambio de estado pasa por cambiarEstado(): es el único punto donde se publica
+ * ESTADO_WS por Kafka.
  */
 public class RegistroEstaciones {
 
@@ -32,7 +33,8 @@ public class RegistroEstaciones {
     //Donde se guardan los cambios que deben sobrevivir a un reinicio (ubicación y bloqueo)
     private final BaseDatos bd;
 
-    private KafkaCentralManager kafkaManager;
+    //null mientras Kafka no esté disponible: la Central sigue funcionando por sockets
+    private volatile KafkaCentralManager kafkaManager;
 
     public RegistroEstaciones(BaseDatos bd) {
         this.bd = bd;
@@ -43,6 +45,13 @@ public class RegistroEstaciones {
      */
     public void registrar(String id, String ubicacion, boolean bloqueada) {
         estaciones.put(id, new Estacion(id, ubicacion, bloqueada));
+    }
+
+    /**
+     * La estación con ese id, o null si no está registrada.
+     */
+    public Estacion getEstacion(String id) {
+        return estaciones.get(id);
     }
 
     /**
@@ -70,21 +79,17 @@ public class RegistroEstaciones {
 
     /**
      * El Monitor avisa de una fuga (su Engine responde KO o no responde).
+     * Si estaba regando: PARAR#id#FUGA a la WS y aviso FUGA al operario (lo hace el gestor Kafka).
      */
     public synchronized void marcarFuga(String id) {
         Estacion est = estaciones.get(id);
         if (est == null || !est.isConectada()) {
             return;
         }
-        if(kafkaManager != null){
-            String idFO = kafkaManager.getOperarioRegando(id);
-            if(idFO != null){
-                kafkaManager.publicarEvento(Topics.FUGA_RIEGO, idFO, "¡ALERTA FUGA en estación " + id + "!");
-            }
-            //Protocolo: PARAR#<idWS>#FUGA
-            kafkaManager.publicarEvento(Topics.ORDENES_RIEGO, id, "PARAR#" + id + "#FUGA");
+        KafkaCentralManager k = kafkaManager;
+        if (k != null) {
+            k.alDetectarFuga(id);
         }
-
         cambiarEstado(est, EstadoWS.FUGA);
     }
 
@@ -106,6 +111,7 @@ public class RegistroEstaciones {
 
     /**
      * La Central bloquea la estación: queda FUERA_SERVICIO (también tras reiniciar la Central).
+     * Si estaba regando, el Engine para y publica FIN con motivo BLOQUEO.
      * Si está desconectada, se guarda el bloqueo y se aplicará cuando se conecte.
      * Si tiene una fuga, sigue en FUGA y pasará a FUERA_SERVICIO al resolverse.
      */
@@ -116,9 +122,10 @@ public class RegistroEstaciones {
         }
         est.setBloqueada(true);
         bd.guardarBloqueo(id, true);
-        if(kafkaManager != null){
+        KafkaCentralManager k = kafkaManager;
+        if (k != null) {
             //Protocolo: BLOQUEAR#<idWS>
-            kafkaManager.publicarEvento(Topics.ORDENES_RIEGO, id, "BLOQUEAR#" + id);
+            k.publicarEvento(Topics.ORDENES_RIEGO, id, "BLOQUEAR#" + id);
         }
         if (est.isConectada() && est.getEstado() != EstadoWS.FUGA) {
             cambiarEstado(est, EstadoWS.FUERA_SERVICIO);
@@ -137,14 +144,89 @@ public class RegistroEstaciones {
         }
         est.setBloqueada(false);
         bd.guardarBloqueo(id, false);
-        if(kafkaManager != null){
-            kafkaManager.publicarEvento(Topics.ORDENES_RIEGO, id, "ACTIVAR#" + id);
+        KafkaCentralManager k = kafkaManager;
+        if (k != null) {
+            //Protocolo: ACTIVAR#<idWS>
+            k.publicarEvento(Topics.ORDENES_RIEGO, id, "ACTIVAR#" + id);
         }
         if (est.getEstado() == EstadoWS.FUERA_SERVICIO) {
             cambiarEstado(est, EstadoWS.DISPONIBLE);
         } else {
             log(id, "activada");
         }
+    }
+
+    /**
+     * La conexión con el Monitor se ha perdido (EOT, caída o sin latidos).
+     * Si estaba regando, la Central cierra el riego con los últimos datos y envía RESUMEN
+     * con motivo CENTRAL (flujo 5 del protocolo).
+     */
+    public synchronized void desconectar(String id) {
+        Estacion est = estaciones.get(id);
+        if (est == null) {
+            return;
+        }
+        est.setConectada(false);
+        KafkaCentralManager k = kafkaManager;
+        if (k != null) {
+            k.alDesconectarEstacion(id);
+        }
+        cambiarEstado(est, EstadoWS.DESCONECTADA);
+    }
+
+    /**
+     * La WS ha confirmado con INICIO que ha abierto la electroválvula: pasa a REGANDO.
+     * @return false si la estación ya no está disponible (p. ej. le ha entrado una fuga)
+     */
+    public synchronized boolean iniciarRiego(String id, String operario) {
+        Estacion est = estaciones.get(id);
+        if (est == null || !est.isConectada() || est.getEstado() != EstadoWS.DISPONIBLE) {
+            return false;
+        }
+        est.setOperario(operario);
+        est.setCaudal(0.0);
+        est.setVolumen(0.0);
+        cambiarEstado(est, EstadoWS.REGANDO);
+        return true;
+    }
+
+    /**
+     * Telemetría de un riego en curso (para el panel).
+     */
+    public void actualizarTelemetria(String id, double caudal, double volumen) {
+        Estacion est = estaciones.get(id);
+        if (est != null) {
+            est.setCaudal(caudal);
+            est.setVolumen(volumen);
+        }
+    }
+
+    /**
+     * El riego ha terminado: se borra el caudal y el operario, y si seguía REGANDO vuelve a
+     * su estado operativo. Si entretanto pasó a FUGA, FUERA_SERVICIO o DESCONECTADA, se respeta.
+     */
+    public synchronized void finalizarRiego(String id) {
+        Estacion est = estaciones.get(id);
+        if (est == null) {
+            return;
+        }
+        est.setCaudal(0.0);
+        est.setOperario(null);
+        if (est.getEstado() == EstadoWS.REGANDO) {
+            cambiarEstado(est, est.isConectada() ? estadoOperativo(est) : EstadoWS.DESCONECTADA);
+        }
+    }
+
+    /**
+     * Todas las estaciones (para el panel). Es una vista del mapa: refleja los cambios
+     * y se puede recorrer aunque otros hilos estén modificando estados.
+     */
+    public Collection<Estacion> getEstaciones() {
+        return estaciones.values();
+    }
+
+    public void setKafkaManager(KafkaCentralManager kafkaManager){
+        this.kafkaManager = kafkaManager;
     }
 
     /**
@@ -155,40 +237,7 @@ public class RegistroEstaciones {
     }
 
     /**
-     * La conexión con el Monitor se ha perdido (EOT, caída o sin latidos).
-     */
-    public synchronized void desconectar(String id) {
-        Estacion est = estaciones.get(id);
-        if (est == null) {
-            return;
-        }
-        //Si estaba regando avisamos al operario de la desconexion
-        if(est.getEstado() == EstadoWS.REGANDO && kafkaManager != null){
-            String idFO = kafkaManager.getOperarioRegando(id);
-            if(idFO !=null){
-                kafkaManager.publicarEvento(Topics.RESUMEN_RIEGO, idFO, "Resumen: Estación " + id + 
-                    " | Motivo: CENTRAL | Riego abortado por desconexión de red."
-                );
-                kafkaManager.liberarOperario(id);
-            }
-        }
-        est.setConectada(false);
-        cambiarEstado(est, EstadoWS.DESCONECTADA);
-    }
-    /**
-     * Todas las estaciones (para el panel). Es una vista del mapa: refleja los cambios
-     * y se puede recorrer aunque otros hilos estén modificando estados.
-     */
-    public Collection<Estacion> getEstaciones() {
-        return estaciones.values();
-    }
-
-    public void cambiarEstadoPublico(Estacion est, EstadoWS nuevo){
-        cambiarEstado(est, nuevo);
-    }
-
-    /**
-     * Único punto donde cambia el estado de una estación.
+     * Único punto donde cambia el estado de una estación (y donde se publica ESTADO_WS).
      */
     private void cambiarEstado(Estacion est, EstadoWS nuevo) {
         EstadoWS anterior = est.getEstado();
@@ -197,16 +246,13 @@ public class RegistroEstaciones {
         }
         est.setEstado(nuevo);
         log(est.getId(), anterior + " -> " + nuevo);
-        if(kafkaManager != null){
-            String mensaje = String.format("ESTADO_WS#%s#%s#%s", est.getId(), est.getUbicacion(), nuevo.name());
-            kafkaManager.publicarEvento(Topics.ESTADO_GLOBAL_WS, est.getId(), mensaje);
+        KafkaCentralManager k = kafkaManager;
+        if (k != null) {
+            k.publicarEstado(est);
         }
     }
 
     private void log(String id, String texto) {
         System.out.println("[" + LocalTime.now().withNano(0) + "] [" + id + "] " + texto);
-    }
-    public void setKafkaManager(KafkaCentralManager kafkaManager){
-        this.kafkaManager = kafkaManager;
     }
 }
