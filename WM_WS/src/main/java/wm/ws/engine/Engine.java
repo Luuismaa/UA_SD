@@ -244,7 +244,8 @@ public class Engine {
         // Formato: TELEMETRIA#WS-03#12.4#186.0 (Locale.US para el punto decimal)
         String telemetria = String.format(java.util.Locale.US, "TELEMETRIA#%s#%.1f#%.1f",
             idWS, caudalLitrosMin, volumenAcumuladoLitros);
-        
+        log("Regando... Operario: " + operarioActual + ", WS: " + idWS + ", Caudal: " + caudalLitrosMin + " L/min, Volumen acumulado: " 
+            + volumenAcumuladoLitros + " L, Tiempo restante: " + tiempoRestanteSegundos + " segs");
         kafkaManager.enviarMensaje(Topics.ESTADO_RIEGO_WS, telemetria);
         if(tiempoRestanteSegundos <=0){
             detenerRiego("TIEMPO");
